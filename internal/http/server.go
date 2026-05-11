@@ -62,6 +62,10 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 		log:         log,
 	}).mount(e)
 
+	// App-version probe — public, called before signin so clients can
+	// route to the force-update screen when they're below the floor.
+	(&appVersionHandler{cfg: cfg}).mount(e)
+
 	// Public (unauthenticated) routes.
 	v1Public := e.Group("/v1")
 	auth.NewHandler(authSvc, log, cfg.IsDev()).Mount(v1Public)

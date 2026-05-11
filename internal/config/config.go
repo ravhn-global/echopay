@@ -26,6 +26,12 @@ type Config struct {
 	// always instant. Default matches the design system; shorten in dev
 	// to test the pending-change flow.
 	RiskLimitRaiseCooldown time.Duration `env:"RISK_LIMIT_RAISE_COOLDOWN" envDefault:"24h"`
+
+	// Clients below MinSupportedAppVersion are blocked at startup. Only
+	// bump for security-critical releases; routine releases use the soft
+	// banner update path (not gated server-side).
+	MinSupportedAppVersion string `env:"MIN_SUPPORTED_APP_VERSION" envDefault:"0.1.0"`
+	LatestAppVersion       string `env:"LATEST_APP_VERSION" envDefault:"0.1.0"`
 }
 
 func (c *Config) IsDev() bool {
