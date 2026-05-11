@@ -9,7 +9,15 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/ravhn/echoapp-backend/internal/auth"
 	"github.com/ravhn/echoapp-backend/internal/config"
+	"github.com/ravhn/echoapp-backend/internal/kyc"
+	"github.com/ravhn/echoapp-backend/internal/ledger"
+	"github.com/ravhn/echoapp-backend/internal/mandates"
+	"github.com/ravhn/echoapp-backend/internal/payments"
+	"github.com/ravhn/echoapp-backend/internal/paystack"
+	"github.com/ravhn/echoapp-backend/internal/store"
+	"github.com/ravhn/echoapp-backend/internal/tokens"
 )
 
 type Server struct {
@@ -28,6 +36,30 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	e.Use(slogRequestLogger(log))
 
 	registerHealth(e, pool, rdb)
+
+	// Wire dependencies.
+	queries := store.New(pool)
+	ps := paystack.New(cfg.PaystackSecretKey)
+	jwtIssuer := auth.NewIssuer(cfg.JWTSecret, cfg.JWTTTL)
+
+	authSvc := auth.NewService(queries, jwtIssuer, log)
+	kycSvc := kyc.NewService(queries)
+	mandatesSvc := mandates.NewService(queries, ps)
+	tokensSvc := tokens.NewService(queries, rdb)
+	ledgerSvc := ledger.NewService(queries)
+	paymentsSvc := payments.NewService(queries, tokensSvc, ledgerSvc, ps, log)
+
+	// Public (unauthenticated) routes.
+	v1Public := e.Group("/v1")
+	auth.NewHandler(authSvc, log, cfg.IsDev()).Mount(v1Public)
+
+	// Authenticated routes.
+	v1Auth := e.Group("/v1", AuthMiddleware(jwtIssuer))
+	(&meHandler{authSvc: authSvc, q: queries, ps: ps}).mount(v1Auth)
+	kyc.NewHandler(kycSvc, UserIDFrom).Mount(v1Auth)
+	mandates.NewHandler(mandatesSvc, UserIDFrom).Mount(v1Auth)
+	tokens.NewHandler(tokensSvc, UserIDFrom).Mount(v1Auth)
+	payments.NewHandler(paymentsSvc, UserIDFrom).Mount(v1Auth)
 
 	return &Server{e: e, log: log}
 }

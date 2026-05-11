@@ -20,11 +20,42 @@ internal/
   logger/           slog setup
   db/               pgx pool
   cache/            Redis client
-  http/             Echo server, middleware, handlers
+  http/             Echo server, JWT middleware, /me, /health
   store/            sqlc-generated query code (created by `make sqlc`)
-migrations/         golang-migrate SQL files
+  pgconv/           pgtype ↔ uuid/time helpers
+  money/            Kobo integer type (never floats)
+  paystack/         Thin Paystack REST client
+  auth/             Phone OTP + HS256 JWT
+  kyc/              BVN tier 1 stub
+  mandates/         Paystack Direct Debit (authorization codes)
+  tokens/           60s session tokens for the audio/QR channel
+  ledger/           Append-only double-entry record
+  payments/         Orchestration: claim → charge → transfer → ledger
+migrations/         golang-migrate SQL files (000001..000006)
 sqlc/               sqlc input (sqlc.yaml + queries/*.sql)
 ```
+
+## API surface (v1)
+
+Public:
+- `POST /v1/auth/otp`           Request OTP for phone
+- `POST /v1/auth/verify`        Verify OTP, returns `{token, user, is_new}`
+
+Authenticated (`Authorization: Bearer <jwt>`):
+- `GET  /v1/me`                       Current user
+- `PUT  /v1/me/receive-account`       Set NUBAN to receive into (Paystack-resolved)
+- `PUT  /v1/me/limits`                Update sending limits
+- `POST /v1/kyc/bvn`                  Submit BVN + DOB
+- `POST /v1/mandates/init`            Start Paystack DD authorization
+- `POST /v1/mandates/verify`          Confirm authorization → saves mandate
+- `GET  /v1/mandates`                 List active mandates
+- `POST /v1/mandates/:id/default`     Set default mandate
+- `DELETE /v1/mandates/:id`           Revoke mandate
+- `POST /v1/tokens/issue`             Receiver issues a 60s session token
+- `GET  /v1/tokens/:code/resolve`     Sender resolves a token for confirmation
+- `POST /v1/payments`                 Sender confirms — orchestrates the full flow
+- `GET  /v1/payments/:id`             Payment status
+- `GET  /v1/activity`                 User payment history
 
 ## Setup
 
@@ -57,4 +88,14 @@ sqlc/               sqlc input (sqlc.yaml + queries/*.sql)
 
 ## Status
 
-**Foundation pass.** Server boots, connects to Postgres + Redis, exposes `/health`. No business logic yet — modules (tokens, payments, ledger, etc.) added in subsequent passes.
+**End-to-end happy path complete.** Server boots, runs migrations, and the
+full sender → Paystack debit → Paystack transfer → ledger pair flow works.
+
+Not yet built:
+- Background reconciliation (asynq) for stuck transactions
+- Paystack webhook receiver (currently we poll on a per-request basis)
+- 24h cooldown for raising sending limits
+- Trusted-merchant caps
+- Refund flow (receiver-issued)
+- Force-update / device binding / suspicious-login alerts
+- Real KYC provider (BVN stub validates format only)

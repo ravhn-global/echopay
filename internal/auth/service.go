@@ -1,0 +1,146 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/ravhn/echoapp-backend/internal/pgconv"
+	"github.com/ravhn/echoapp-backend/internal/store"
+)
+
+var (
+	ErrOTPNotFound    = errors.New("no active OTP request for this phone")
+	ErrOTPExpired     = errors.New("OTP expired")
+	ErrOTPMaxAttempts = errors.New("too many attempts")
+	ErrOTPInvalid     = errors.New("invalid OTP")
+)
+
+const (
+	otpTTL         = 5 * time.Minute
+	otpMaxAttempts = 5
+)
+
+type Service struct {
+	q      store.Querier
+	issuer *Issuer
+	log    *slog.Logger
+}
+
+func NewService(q store.Querier, issuer *Issuer, log *slog.Logger) *Service {
+	return &Service{q: q, issuer: issuer, log: log}
+}
+
+// RequestOTP generates a fresh OTP, expires any pending ones for the same
+// phone, and returns the OTP. In dev/local env the caller logs it for testing;
+// in prod it would be sent to an SMS provider.
+type OTPResult struct {
+	Code      string
+	ExpiresAt time.Time
+}
+
+func (s *Service) RequestOTP(ctx context.Context, phone, purpose string) (*OTPResult, error) {
+	if purpose == "" {
+		purpose = "signin"
+	}
+	if err := s.q.ExpirePreviousOTPs(ctx, store.ExpirePreviousOTPsParams{
+		Phone:   phone,
+		Purpose: purpose,
+	}); err != nil {
+		return nil, fmt.Errorf("expire previous otps: %w", err)
+	}
+
+	code, err := GenerateOTP()
+	if err != nil {
+		return nil, fmt.Errorf("generate otp: %w", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("hash otp: %w", err)
+	}
+	expires := time.Now().Add(otpTTL)
+	if _, err := s.q.CreateOTPRequest(ctx, store.CreateOTPRequestParams{
+		Phone:     phone,
+		CodeHash:  string(hash),
+		Purpose:   purpose,
+		ExpiresAt: pgconv.TimeFrom(expires),
+	}); err != nil {
+		return nil, fmt.Errorf("create otp: %w", err)
+	}
+	return &OTPResult{Code: code, ExpiresAt: expires}, nil
+}
+
+type VerifyResult struct {
+	Token   string
+	User    store.User
+	IsNew   bool
+}
+
+// VerifyOTP checks the OTP, then upserts a user for the phone and issues a JWT.
+func (s *Service) VerifyOTP(ctx context.Context, phone, purpose, code string) (*VerifyResult, error) {
+	if purpose == "" {
+		purpose = "signin"
+	}
+	req, err := s.q.GetLatestOTPRequest(ctx, store.GetLatestOTPRequestParams{
+		Phone:   phone,
+		Purpose: purpose,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrOTPNotFound
+		}
+		return nil, fmt.Errorf("get otp: %w", err)
+	}
+	if pgconv.TimeTo(req.ExpiresAt).Before(time.Now()) {
+		return nil, ErrOTPExpired
+	}
+	if req.Attempts >= req.MaxAttempts {
+		return nil, ErrOTPMaxAttempts
+	}
+	if _, err := s.q.IncrementOTPAttempts(ctx, req.ID); err != nil {
+		return nil, fmt.Errorf("increment attempts: %w", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(req.CodeHash), []byte(code)); err != nil {
+		return nil, ErrOTPInvalid
+	}
+	if err := s.q.MarkOTPVerified(ctx, req.ID); err != nil {
+		return nil, fmt.Errorf("mark otp verified: %w", err)
+	}
+
+	user, isNew, err := s.upsertUser(ctx, phone)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := s.issuer.Issue(pgconv.UUIDTo(user.ID), user.Phone)
+	if err != nil {
+		return nil, fmt.Errorf("issue jwt: %w", err)
+	}
+	return &VerifyResult{Token: token, User: user, IsNew: isNew}, nil
+}
+
+func (s *Service) upsertUser(ctx context.Context, phone string) (store.User, bool, error) {
+	user, err := s.q.GetUserByPhone(ctx, phone)
+	if err == nil {
+		return user, false, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, false, fmt.Errorf("get user by phone: %w", err)
+	}
+	user, err = s.q.CreateUser(ctx, phone)
+	if err != nil {
+		return store.User{}, false, fmt.Errorf("create user: %w", err)
+	}
+	return user, true, nil
+}
+
+// CurrentUser fetches a user by ID (used by /v1/me).
+func (s *Service) CurrentUser(ctx context.Context, userID uuid.UUID) (store.User, error) {
+	return s.q.GetUserByID(ctx, pgconv.UUIDFrom(userID))
+}

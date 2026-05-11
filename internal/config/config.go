@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 	"github.com/joho/godotenv"
@@ -14,9 +15,16 @@ type Config struct {
 	DatabaseURL string `env:"DATABASE_URL,required"`
 	RedisURL    string `env:"REDIS_URL,required"`
 
-	PaystackSecretKey  string `env:"PAYSTACK_SECRET_KEY"`
+	JWTSecret string        `env:"JWT_SECRET,required"`
+	JWTTTL    time.Duration `env:"JWT_TTL" envDefault:"720h"` // 30 days
+
+	PaystackSecretKey  string `env:"PAYSTACK_SECRET_KEY,required"`
 	PaystackPublicKey  string `env:"PAYSTACK_PUBLIC_KEY"`
 	PaystackWebhookKey string `env:"PAYSTACK_WEBHOOK_KEY"`
+}
+
+func (c *Config) IsDev() bool {
+	return c.Env == "local" || c.Env == "dev"
 }
 
 func Load() (*Config, error) {
