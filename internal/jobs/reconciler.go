@@ -18,6 +18,7 @@ import (
 
 	"github.com/ravhn/echoapp-backend/internal/paystack"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
+	"github.com/ravhn/echoapp-backend/internal/risk"
 	"github.com/ravhn/echoapp-backend/internal/store"
 )
 
@@ -29,13 +30,14 @@ const (
 )
 
 type Reconciler struct {
-	q   store.Querier
-	ps  *paystack.Client
-	log *slog.Logger
+	q      store.Querier
+	ps     *paystack.Client
+	limits *risk.LimitsService
+	log    *slog.Logger
 }
 
-func NewReconciler(q store.Querier, ps *paystack.Client, log *slog.Logger) *Reconciler {
-	return &Reconciler{q: q, ps: ps, log: log}
+func NewReconciler(q store.Querier, ps *paystack.Client, limits *risk.LimitsService, log *slog.Logger) *Reconciler {
+	return &Reconciler{q: q, ps: ps, limits: limits, log: log}
 }
 
 // Run blocks until ctx is cancelled, sweeping stuck payments every tick.
@@ -57,6 +59,13 @@ func (r *Reconciler) Run(ctx context.Context) {
 }
 
 func (r *Reconciler) sweep(ctx context.Context) {
+	// Apply any limit-raise cooldowns that have elapsed since the last tick.
+	if applied, err := r.limits.ApplyDue(ctx, reconcileBatchSize); err != nil {
+		r.log.Error("apply due limits failed", "err", err)
+	} else if applied > 0 {
+		r.log.Info("limit changes applied", "count", applied)
+	}
+
 	cutoff := time.Now().Add(-stuckAfter)
 	payments, err := r.q.ListStuckPayments(ctx, store.ListStuckPaymentsParams{
 		UpdatedAt: pgconv.TimeFrom(cutoff),
@@ -66,10 +75,9 @@ func (r *Reconciler) sweep(ctx context.Context) {
 		r.log.Error("reconciler list failed", "err", err)
 		return
 	}
-	if len(payments) == 0 {
-		return
+	if len(payments) > 0 {
+		r.log.Info("reconciler sweep", "count", len(payments))
 	}
-	r.log.Info("reconciler sweep", "count", len(payments))
 	for _, p := range payments {
 		if err := r.reconcileOne(ctx, p); err != nil {
 			r.log.Error("reconcile payment", "id", pgconv.UUIDTo(p.ID), "err", err)

@@ -27,6 +27,7 @@ import (
 	"github.com/ravhn/echoapp-backend/internal/ledger"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
+	"github.com/ravhn/echoapp-backend/internal/risk"
 	"github.com/ravhn/echoapp-backend/internal/store"
 	"github.com/ravhn/echoapp-backend/internal/tokens"
 )
@@ -44,21 +45,23 @@ var (
 )
 
 type Service struct {
-	q      store.Querier
-	tokens *tokens.Service
-	ledger *ledger.Service
-	ps     *paystack.Client
-	log    *slog.Logger
+	q       store.Querier
+	tokens  *tokens.Service
+	ledger  *ledger.Service
+	trusted *risk.TrustedService
+	ps      *paystack.Client
+	log     *slog.Logger
 }
 
 func NewService(
 	q store.Querier,
 	tokensSvc *tokens.Service,
 	ledgerSvc *ledger.Service,
+	trustedSvc *risk.TrustedService,
 	ps *paystack.Client,
 	log *slog.Logger,
 ) *Service {
-	return &Service{q: q, tokens: tokensSvc, ledger: ledgerSvc, ps: ps, log: log}
+	return &Service{q: q, tokens: tokensSvc, ledger: ledgerSvc, trusted: trustedSvc, ps: ps, log: log}
 }
 
 type CreateRequest struct {
@@ -111,7 +114,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*Result, error
 		_, _ = s.q.MarkTokenFailed(ctx, tok.ID)
 		return nil, ErrReceiverNoBank
 	}
-	if err := s.enforceLimits(ctx, sender, tok.AmountKobo); err != nil {
+	if err := s.enforceLimits(ctx, sender, pgconv.UUIDTo(receiver.ID), tok.AmountKobo); err != nil {
 		_, _ = s.q.MarkTokenFailed(ctx, tok.ID)
 		return nil, err
 	}
@@ -180,7 +183,7 @@ func (s *Service) Refund(ctx context.Context, req RefundRequest) (*Result, error
 	if !hasBankDetails(originalSender) {
 		return nil, ErrReceiverNoBank
 	}
-	if err := s.enforceLimits(ctx, refunder, req.AmountKobo); err != nil {
+	if err := s.enforceLimits(ctx, refunder, pgconv.UUIDTo(originalSender.ID), req.AmountKobo); err != nil {
 		return nil, err
 	}
 
@@ -275,8 +278,9 @@ func (s *Service) validatedMandate(ctx context.Context, mandateID, userID uuid.U
 	return mandate, nil
 }
 
-func (s *Service) enforceLimits(ctx context.Context, sender store.User, amount int64) error {
-	if amount > sender.PerTxLimitKobo {
+func (s *Service) enforceLimits(ctx context.Context, sender store.User, receiverID uuid.UUID, amount int64) error {
+	effectiveTxCap := s.trusted.EffectiveCap(ctx, pgconv.UUIDTo(sender.ID), receiverID, sender.PerTxLimitKobo)
+	if amount > effectiveTxCap {
 		return ErrTxLimitExceeded
 	}
 	sentLast24h, err := s.q.SumUserSentLast24h(ctx, sender.ID)

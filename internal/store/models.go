@@ -66,6 +66,17 @@ type Payment struct {
 	RefundsPaymentID  pgtype.UUID        `json:"refunds_payment_id"`
 }
 
+type PendingLimitChange struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	PerTxLimitKobo  int64              `json:"per_tx_limit_kobo"`
+	PerDayLimitKobo int64              `json:"per_day_limit_kobo"`
+	AppliesAt       pgtype.Timestamptz `json:"applies_at"`
+	AppliedAt       pgtype.Timestamptz `json:"applied_at"`
+	CancelledAt     pgtype.Timestamptz `json:"cancelled_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type Token struct {
 	ID               pgtype.UUID        `json:"id"`
 	Code             string             `json:"code"`
@@ -79,6 +90,16 @@ type Token struct {
 	SettledPaymentID pgtype.UUID        `json:"settled_payment_id"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TrustedMerchant struct {
+	ID             pgtype.UUID        `json:"id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	MerchantUserID pgtype.UUID        `json:"merchant_user_id"`
+	PerTxCapKobo   int64              `json:"per_tx_cap_kobo"`
+	Label          *string            `json:"label"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type User struct {

@@ -11,12 +11,15 @@ import (
 )
 
 type Querier interface {
+	CancelPendingLimitChanges(ctx context.Context, userID pgtype.UUID) error
 	ClaimToken(ctx context.Context, arg ClaimTokenParams) (Token, error)
 	CreateMandate(ctx context.Context, arg CreateMandateParams) (Mandate, error)
 	CreateOTPRequest(ctx context.Context, arg CreateOTPRequestParams) (OtpRequest, error)
 	CreatePayment(ctx context.Context, arg CreatePaymentParams) (Payment, error)
+	CreatePendingLimitChange(ctx context.Context, arg CreatePendingLimitChangeParams) (PendingLimitChange, error)
 	CreateToken(ctx context.Context, arg CreateTokenParams) (Token, error)
 	CreateUser(ctx context.Context, phone string) (User, error)
+	DeleteTrustedMerchant(ctx context.Context, arg DeleteTrustedMerchantParams) error
 	ExpirePreviousOTPs(ctx context.Context, arg ExpirePreviousOTPsParams) error
 	ExpireStaleTokens(ctx context.Context) error
 	GetDefaultMandate(ctx context.Context, userID pgtype.UUID) (Mandate, error)
@@ -26,20 +29,25 @@ type Querier interface {
 	GetPaymentByID(ctx context.Context, id pgtype.UUID) (Payment, error)
 	GetPaymentByIdempotencyKey(ctx context.Context, idempotencyKey string) (Payment, error)
 	GetPaymentByTransferReference(ctx context.Context, transferReference *string) (Payment, error)
+	GetPendingLimitChange(ctx context.Context, userID pgtype.UUID) (PendingLimitChange, error)
 	GetTokenByCode(ctx context.Context, code string) (Token, error)
 	GetTokenByID(ctx context.Context, id pgtype.UUID) (Token, error)
+	GetTrustedMerchantCap(ctx context.Context, arg GetTrustedMerchantCapParams) (int64, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	GetUserByPhone(ctx context.Context, phone string) (User, error)
 	IncrementOTPAttempts(ctx context.Context, id pgtype.UUID) (OtpRequest, error)
 	InsertLedgerEntry(ctx context.Context, arg InsertLedgerEntryParams) (LedgerEntry, error)
+	ListDuePendingLimits(ctx context.Context, arg ListDuePendingLimitsParams) ([]PendingLimitChange, error)
 	ListPaymentLedger(ctx context.Context, paymentID pgtype.UUID) ([]LedgerEntry, error)
 	ListStuckPayments(ctx context.Context, arg ListStuckPaymentsParams) ([]Payment, error)
+	ListTrustedMerchants(ctx context.Context, userID pgtype.UUID) ([]ListTrustedMerchantsRow, error)
 	ListUserLedger(ctx context.Context, arg ListUserLedgerParams) ([]LedgerEntry, error)
 	ListUserMandates(ctx context.Context, userID pgtype.UUID) ([]Mandate, error)
 	ListUserPayments(ctx context.Context, arg ListUserPaymentsParams) ([]Payment, error)
 	MarkOTPVerified(ctx context.Context, id pgtype.UUID) error
 	MarkPaymentFailed(ctx context.Context, arg MarkPaymentFailedParams) (Payment, error)
 	MarkPaymentSettled(ctx context.Context, id pgtype.UUID) (Payment, error)
+	MarkPendingLimitApplied(ctx context.Context, id pgtype.UUID) error
 	MarkTokenFailed(ctx context.Context, id pgtype.UUID) (Token, error)
 	MarkTokenSettled(ctx context.Context, arg MarkTokenSettledParams) (Token, error)
 	RevokeMandate(ctx context.Context, arg RevokeMandateParams) error
@@ -51,6 +59,7 @@ type Querier interface {
 	UpdateUserKYC(ctx context.Context, arg UpdateUserKYCParams) (User, error)
 	UpdateUserLimits(ctx context.Context, arg UpdateUserLimitsParams) (User, error)
 	UpdateUserReceiveAccount(ctx context.Context, arg UpdateUserReceiveAccountParams) (User, error)
+	UpsertTrustedMerchant(ctx context.Context, arg UpsertTrustedMerchantParams) (TrustedMerchant, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -16,6 +16,7 @@ import (
 	"github.com/ravhn/echoapp-backend/internal/mandates"
 	"github.com/ravhn/echoapp-backend/internal/payments"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
+	"github.com/ravhn/echoapp-backend/internal/risk"
 	"github.com/ravhn/echoapp-backend/internal/store"
 	"github.com/ravhn/echoapp-backend/internal/tokens"
 )
@@ -23,7 +24,8 @@ import (
 type Server struct {
 	e           *echo.Echo
 	log         *slog.Logger
-	PaymentsSvc *payments.Service // exposed for the reconciler in main
+	PaymentsSvc *payments.Service     // exposed for the reconciler in main
+	LimitsSvc   *risk.LimitsService   // exposed so main can apply due pending limits
 }
 
 func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client) *Server {
@@ -48,7 +50,9 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	mandatesSvc := mandates.NewService(queries, ps)
 	tokensSvc := tokens.NewService(queries, rdb)
 	ledgerSvc := ledger.NewService(queries)
-	paymentsSvc := payments.NewService(queries, tokensSvc, ledgerSvc, ps, log)
+	trustedSvc := risk.NewTrustedService(queries)
+	limitsSvc := risk.NewLimitsService(queries, cfg.RiskLimitRaiseCooldown, log)
+	paymentsSvc := payments.NewService(queries, tokensSvc, ledgerSvc, trustedSvc, ps, log)
 
 	// Webhooks (public, signature-verified).
 	(&webhookHandler{
@@ -64,13 +68,14 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 
 	// Authenticated routes.
 	v1Auth := e.Group("/v1", AuthMiddleware(jwtIssuer))
-	(&meHandler{authSvc: authSvc, q: queries, ps: ps}).mount(v1Auth)
+	(&meHandler{authSvc: authSvc, q: queries, ps: ps, limits: limitsSvc}).mount(v1Auth)
 	kyc.NewHandler(kycSvc, UserIDFrom).Mount(v1Auth)
 	mandates.NewHandler(mandatesSvc, UserIDFrom).Mount(v1Auth)
 	tokens.NewHandler(tokensSvc, UserIDFrom).Mount(v1Auth)
 	payments.NewHandler(paymentsSvc, UserIDFrom).Mount(v1Auth)
+	risk.NewHandler(limitsSvc, trustedSvc, UserIDFrom).Mount(v1Auth)
 
-	return &Server{e: e, log: log, PaymentsSvc: paymentsSvc}
+	return &Server{e: e, log: log, PaymentsSvc: paymentsSvc, LimitsSvc: limitsSvc}
 }
 
 func (s *Server) Start(addr string) error {

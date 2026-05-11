@@ -21,6 +21,11 @@ type Config struct {
 	PaystackSecretKey  string `env:"PAYSTACK_SECRET_KEY,required"`
 	PaystackPublicKey  string `env:"PAYSTACK_PUBLIC_KEY"`
 	PaystackWebhookKey string `env:"PAYSTACK_WEBHOOK_KEY"`
+
+	// Cooldown applied when a user raises any sending limit. Lowering is
+	// always instant. Default matches the design system; shorten in dev
+	// to test the pending-change flow.
+	RiskLimitRaiseCooldown time.Duration `env:"RISK_LIMIT_RAISE_COOLDOWN" envDefault:"24h"`
 }
 
 func (c *Config) IsDev() bool {

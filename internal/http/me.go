@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -9,6 +10,7 @@ import (
 	"github.com/ravhn/echoapp-backend/internal/auth"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
+	"github.com/ravhn/echoapp-backend/internal/risk"
 	"github.com/ravhn/echoapp-backend/internal/store"
 )
 
@@ -16,6 +18,7 @@ type meHandler struct {
 	authSvc *auth.Service
 	q       store.Querier
 	ps      *paystack.Client
+	limits  *risk.LimitsService
 }
 
 func (h *meHandler) mount(g *echo.Group) {
@@ -99,24 +102,27 @@ func (h *meHandler) setLimits(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	if body.PerTxLimitKobo <= 0 || body.PerDayLimitKobo <= 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "limits must be positive")
-	}
-	if body.PerTxLimitKobo > body.PerDayLimitKobo {
-		return echo.NewHTTPError(http.StatusBadRequest, "per-tx limit cannot exceed daily limit")
-	}
-	// NOTE: the design system mandates a 24h cooldown for *raising* limits.
-	// v1 applies immediately; cooldown enforcement lands with the risk module.
-	u, err := h.q.UpdateUserLimits(c.Request().Context(), store.UpdateUserLimitsParams{
-		ID:              pgconv.UUIDFrom(userID),
-		PerTxLimitKobo:  body.PerTxLimitKobo,
-		PerDayLimitKobo: body.PerDayLimitKobo,
-	})
+	outcome, err := h.limits.SetLimits(
+		c.Request().Context(), userID, body.PerTxLimitKobo, body.PerDayLimitKobo,
+	)
 	if err != nil {
+		if errors.Is(err, risk.ErrLimitsInvalid) {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(http.StatusOK, map[string]any{
-		"per_tx_limit_kobo":  u.PerTxLimitKobo,
-		"per_day_limit_kobo": u.PerDayLimitKobo,
-	})
+
+	resp := map[string]any{
+		"applied":            outcome.Applied,
+		"per_tx_limit_kobo":  outcome.User.PerTxLimitKobo,
+		"per_day_limit_kobo": outcome.User.PerDayLimitKobo,
+	}
+	if outcome.Pending != nil {
+		resp["pending"] = map[string]any{
+			"per_tx_limit_kobo":  outcome.Pending.PerTxLimitKobo,
+			"per_day_limit_kobo": outcome.Pending.PerDayLimitKobo,
+			"applies_at":         pgconv.TimeTo(outcome.Pending.AppliesAt).Unix(),
+		}
+	}
+	return c.JSON(http.StatusOK, resp)
 }

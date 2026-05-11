@@ -53,8 +53,13 @@ func main() {
 
 	// Background reconciler — re-uses the same Querier and Paystack client
 	// the HTTP server uses. Idempotent operations keep it safe to run
-	// concurrent with the HTTP path.
-	reconciler := jobs.NewReconciler(store.New(pool), paystack.New(cfg.PaystackSecretKey), log)
+	// concurrent with the HTTP path. Also applies due limit-raise changes.
+	reconciler := jobs.NewReconciler(
+		store.New(pool),
+		paystack.New(cfg.PaystackSecretKey),
+		srv.LimitsSvc,
+		log,
+	)
 	go reconciler.Run(ctx)
 
 	go func() {
