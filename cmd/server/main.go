@@ -14,7 +14,10 @@ import (
 	"github.com/ravhn/echoapp-backend/internal/config"
 	"github.com/ravhn/echoapp-backend/internal/db"
 	httpsrv "github.com/ravhn/echoapp-backend/internal/http"
+	"github.com/ravhn/echoapp-backend/internal/jobs"
 	"github.com/ravhn/echoapp-backend/internal/logger"
+	"github.com/ravhn/echoapp-backend/internal/paystack"
+	"github.com/ravhn/echoapp-backend/internal/store"
 )
 
 func main() {
@@ -47,6 +50,12 @@ func main() {
 	log.Info("redis connected")
 
 	srv := httpsrv.New(cfg, log, pool, rdb)
+
+	// Background reconciler — re-uses the same Querier and Paystack client
+	// the HTTP server uses. Idempotent operations keep it safe to run
+	// concurrent with the HTTP path.
+	reconciler := jobs.NewReconciler(store.New(pool), paystack.New(cfg.PaystackSecretKey), log)
+	go reconciler.Run(ctx)
 
 	go func() {
 		log.Info("server starting", "addr", cfg.HTTPAddr)

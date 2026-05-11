@@ -24,6 +24,7 @@ func NewHandler(svc *Service, userIDFn func(echo.Context) uuid.UUID) *Handler {
 func (h *Handler) Mount(g *echo.Group) {
 	g.POST("/payments", h.create)
 	g.GET("/payments/:id", h.get)
+	g.POST("/payments/:id/refund", h.refund)
 	g.GET("/activity", h.activity)
 }
 
@@ -88,6 +89,57 @@ func (h *Handler) get(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "not your payment")
 	}
 	return c.JSON(http.StatusOK, toJSON(p))
+}
+
+type refundBody struct {
+	MandateID      string `json:"mandate_id"`
+	AmountKobo     int64  `json:"amount_kobo"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+func (h *Handler) refund(c echo.Context) error {
+	userID := h.userIDFn(c)
+	if userID == uuid.Nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "no user")
+	}
+	originalID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid payment id")
+	}
+	var body refundBody
+	if err := c.Bind(&body); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if body.MandateID == "" || body.IdempotencyKey == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mandate_id and idempotency_key required")
+	}
+	mandateID, err := uuid.Parse(body.MandateID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid mandate_id")
+	}
+	res, err := h.svc.Refund(c.Request().Context(), RefundRequest{
+		OriginalPaymentID: originalID,
+		RefunderUserID:    userID,
+		MandateID:         mandateID,
+		AmountKobo:        body.AmountKobo,
+		IdempotencyKey:    body.IdempotencyKey,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotReceiver), errors.Is(err, ErrAlreadyRefunded):
+			return echo.NewHTTPError(http.StatusForbidden, err.Error())
+		case errors.Is(err, ErrRefundTooLarge), errors.Is(err, ErrOriginalNotSettled),
+			errors.Is(err, ErrMandateNotActive), errors.Is(err, ErrMandateNotOwned):
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrTxLimitExceeded), errors.Is(err, ErrDailyLimitExceeded):
+			return echo.NewHTTPError(http.StatusForbidden, err.Error())
+		case errors.Is(err, ErrReceiverNoBank):
+			return echo.NewHTTPError(http.StatusFailedDependency, err.Error())
+		default:
+			return echo.NewHTTPError(http.StatusBadGateway, err.Error())
+		}
+	}
+	return c.JSON(http.StatusCreated, toJSON(res.Payment))
 }
 
 func (h *Handler) activity(c echo.Context) error {

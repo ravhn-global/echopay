@@ -63,6 +63,7 @@ type Payment struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	SettledAt         pgtype.Timestamptz `json:"settled_at"`
+	RefundsPaymentID  pgtype.UUID        `json:"refunds_payment_id"`
 }
 
 type Token struct {

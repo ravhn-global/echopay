@@ -31,7 +31,9 @@ internal/
   tokens/           60s session tokens for the audio/QR channel
   ledger/           Append-only double-entry record
   payments/         Orchestration: claim → charge → transfer → ledger
-migrations/         golang-migrate SQL files (000001..000006)
+                    plus refund flow and webhook event handling
+  jobs/             Periodic reconciler for stuck payments
+migrations/         golang-migrate SQL files (000001..000007)
 sqlc/               sqlc input (sqlc.yaml + queries/*.sql)
 ```
 
@@ -55,7 +57,11 @@ Authenticated (`Authorization: Bearer <jwt>`):
 - `GET  /v1/tokens/:code/resolve`     Sender resolves a token for confirmation
 - `POST /v1/payments`                 Sender confirms — orchestrates the full flow
 - `GET  /v1/payments/:id`             Payment status
+- `POST /v1/payments/:id/refund`      Receiver-issued refund (linked NIP)
 - `GET  /v1/activity`                 User payment history
+
+Webhooks (public, HMAC-SHA512 signature verified):
+- `POST /webhooks/paystack`           charge.* and transfer.* events
 
 ## Setup
 
@@ -88,14 +94,19 @@ Authenticated (`Authorization: Bearer <jwt>`):
 
 ## Status
 
-**End-to-end happy path complete.** Server boots, runs migrations, and the
-full sender → Paystack debit → Paystack transfer → ledger pair flow works.
+**Pay, receive, refund, webhook, reconciler all wired.** Full sender →
+Paystack debit → Paystack transfer → ledger pair flow runs synchronously
+inside `POST /v1/payments`. A 5-minute reconciler goroutine polls Paystack
+for any payment stuck in `debiting`/`transferring`/`settling` longer than
+10 minutes and flips it to terminal state. The `/webhooks/paystack`
+endpoint handles `charge.*` and `transfer.*` events idempotently — every
+branch tolerates the sync path having already reached the same state.
 
 Not yet built:
-- Background reconciliation (asynq) for stuck transactions
-- Paystack webhook receiver (currently we poll on a per-request basis)
-- 24h cooldown for raising sending limits
+- 24h cooldown for raising sending limits (lowering is instant)
 - Trusted-merchant caps
-- Refund flow (receiver-issued)
 - Force-update / device binding / suspicious-login alerts
 - Real KYC provider (BVN stub validates format only)
+- Auto-refund automation (reconciler currently only marks failed; the
+  retry-as-refund logic for receivers' bank rejections lands next)
+- Flutter app

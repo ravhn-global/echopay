@@ -21,8 +21,9 @@ import (
 )
 
 type Server struct {
-	e   *echo.Echo
-	log *slog.Logger
+	e           *echo.Echo
+	log         *slog.Logger
+	PaymentsSvc *payments.Service // exposed for the reconciler in main
 }
 
 func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client) *Server {
@@ -49,6 +50,14 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	ledgerSvc := ledger.NewService(queries)
 	paymentsSvc := payments.NewService(queries, tokensSvc, ledgerSvc, ps, log)
 
+	// Webhooks (public, signature-verified).
+	(&webhookHandler{
+		paymentsSvc: paymentsSvc,
+		webhookKey:  cfg.PaystackWebhookKey,
+		devMode:     cfg.IsDev(),
+		log:         log,
+	}).mount(e)
+
 	// Public (unauthenticated) routes.
 	v1Public := e.Group("/v1")
 	auth.NewHandler(authSvc, log, cfg.IsDev()).Mount(v1Public)
@@ -61,7 +70,7 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	tokens.NewHandler(tokensSvc, UserIDFrom).Mount(v1Auth)
 	payments.NewHandler(paymentsSvc, UserIDFrom).Mount(v1Auth)
 
-	return &Server{e: e, log: log}
+	return &Server{e: e, log: log, PaymentsSvc: paymentsSvc}
 }
 
 func (s *Server) Start(addr string) error {
