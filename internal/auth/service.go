@@ -76,14 +76,27 @@ func (s *Service) RequestOTP(ctx context.Context, phone, purpose string) (*OTPRe
 	return &OTPResult{Code: code, ExpiresAt: expires}, nil
 }
 
+// DeviceInfo carries identifying info from the client at signin. Every
+// field is optional — clients on platforms that don't expose a value
+// just send empty strings.
+type DeviceInfo struct {
+	Fingerprint string
+	Model       string
+	OSName      string
+	OSVersion   string
+	AppVersion  string
+}
+
 type VerifyResult struct {
 	Token   string
 	User    store.User
 	IsNew   bool
+	Session store.DeviceSession
 }
 
-// VerifyOTP checks the OTP, then upserts a user for the phone and issues a JWT.
-func (s *Service) VerifyOTP(ctx context.Context, phone, purpose, code string) (*VerifyResult, error) {
+// VerifyOTP checks the OTP, upserts a user, creates a device_session row,
+// and returns a JWT whose jti claim is that session id.
+func (s *Service) VerifyOTP(ctx context.Context, phone, purpose, code string, device DeviceInfo) (*VerifyResult, error) {
 	if purpose == "" {
 		purpose = "signin"
 	}
@@ -118,11 +131,25 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, purpose, code string) (*
 		return nil, err
 	}
 
-	token, err := s.issuer.Issue(pgconv.UUIDTo(user.ID), user.Phone)
+	token, jti, err := s.issuer.Issue(pgconv.UUIDTo(user.ID), user.Phone)
 	if err != nil {
 		return nil, fmt.Errorf("issue jwt: %w", err)
 	}
-	return &VerifyResult{Token: token, User: user, IsNew: isNew}, nil
+
+	session, err := s.q.CreateDeviceSession(ctx, store.CreateDeviceSessionParams{
+		UserID:      user.ID,
+		Jti:         pgconv.UUIDFrom(jti),
+		Fingerprint: nilIfEmpty(device.Fingerprint),
+		Model:       nilIfEmpty(device.Model),
+		OsName:      nilIfEmpty(device.OSName),
+		OsVersion:   nilIfEmpty(device.OSVersion),
+		AppVersion:  nilIfEmpty(device.AppVersion),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create device session: %w", err)
+	}
+
+	return &VerifyResult{Token: token, User: user, IsNew: isNew, Session: session}, nil
 }
 
 func (s *Service) upsertUser(ctx context.Context, phone string) (store.User, bool, error) {
@@ -143,4 +170,11 @@ func (s *Service) upsertUser(ctx context.Context, phone string) (store.User, boo
 // CurrentUser fetches a user by ID (used by /v1/me).
 func (s *Service) CurrentUser(ctx context.Context, userID uuid.UUID) (store.User, error) {
 	return s.q.GetUserByID(ctx, pgconv.UUIDFrom(userID))
+}
+
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

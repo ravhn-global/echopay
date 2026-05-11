@@ -8,6 +8,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type DeviceSession struct {
+	ID          pgtype.UUID        `json:"id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	Jti         pgtype.UUID        `json:"jti"`
+	Fingerprint *string            `json:"fingerprint"`
+	Model       *string            `json:"model"`
+	OsName      *string            `json:"os_name"`
+	OsVersion   *string            `json:"os_version"`
+	AppVersion  *string            `json:"app_version"`
+	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type LedgerEntry struct {
 	ID         int64              `json:"id"`
 	PaymentID  pgtype.UUID        `json:"payment_id"`

@@ -70,14 +70,16 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	v1Public := e.Group("/v1")
 	auth.NewHandler(authSvc, log, cfg.IsDev()).Mount(v1Public)
 
-	// Authenticated routes.
-	v1Auth := e.Group("/v1", AuthMiddleware(jwtIssuer))
+	// Authenticated routes — middleware also gates JWT revocation by
+	// checking the jti against device_sessions on every request.
+	v1Auth := e.Group("/v1", AuthMiddleware(jwtIssuer, queries))
 	(&meHandler{authSvc: authSvc, q: queries, ps: ps, limits: limitsSvc}).mount(v1Auth)
 	kyc.NewHandler(kycSvc, UserIDFrom).Mount(v1Auth)
 	mandates.NewHandler(mandatesSvc, UserIDFrom).Mount(v1Auth)
 	tokens.NewHandler(tokensSvc, UserIDFrom).Mount(v1Auth)
 	payments.NewHandler(paymentsSvc, UserIDFrom).Mount(v1Auth)
 	risk.NewHandler(limitsSvc, trustedSvc, UserIDFrom).Mount(v1Auth)
+	(&devicesHandler{q: queries}).mount(v1Auth)
 
 	return &Server{e: e, log: log, PaymentsSvc: paymentsSvc, LimitsSvc: limitsSvc}
 }

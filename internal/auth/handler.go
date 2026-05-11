@@ -68,6 +68,13 @@ type verifyOTPBody struct {
 	Phone   string `json:"phone"`
 	Purpose string `json:"purpose"`
 	Code    string `json:"code"`
+	Device  *struct {
+		Fingerprint string `json:"fingerprint"`
+		Model       string `json:"model"`
+		OSName      string `json:"os_name"`
+		OSVersion   string `json:"os_version"`
+		AppVersion  string `json:"app_version"`
+	} `json:"device"`
 }
 
 type verifyOTPResponse struct {
@@ -91,7 +98,17 @@ func (h *Handler) verifyOTP(c echo.Context) error {
 	if body.Phone == "" || body.Code == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "phone and code required")
 	}
-	result, err := h.svc.VerifyOTP(c.Request().Context(), body.Phone, body.Purpose, body.Code)
+	var device DeviceInfo
+	if body.Device != nil {
+		device = DeviceInfo{
+			Fingerprint: body.Device.Fingerprint,
+			Model:       body.Device.Model,
+			OSName:      body.Device.OSName,
+			OSVersion:   body.Device.OSVersion,
+			AppVersion:  body.Device.AppVersion,
+		}
+	}
+	result, err := h.svc.VerifyOTP(c.Request().Context(), body.Phone, body.Purpose, body.Code, device)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrOTPNotFound), errors.Is(err, ErrOTPExpired):

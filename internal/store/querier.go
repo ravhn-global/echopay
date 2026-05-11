@@ -13,6 +13,7 @@ import (
 type Querier interface {
 	CancelPendingLimitChanges(ctx context.Context, userID pgtype.UUID) error
 	ClaimToken(ctx context.Context, arg ClaimTokenParams) (Token, error)
+	CreateDeviceSession(ctx context.Context, arg CreateDeviceSessionParams) (DeviceSession, error)
 	CreateMandate(ctx context.Context, arg CreateMandateParams) (Mandate, error)
 	CreateOTPRequest(ctx context.Context, arg CreateOTPRequestParams) (OtpRequest, error)
 	CreatePayment(ctx context.Context, arg CreatePaymentParams) (Payment, error)
@@ -22,6 +23,7 @@ type Querier interface {
 	DeleteTrustedMerchant(ctx context.Context, arg DeleteTrustedMerchantParams) error
 	ExpirePreviousOTPs(ctx context.Context, arg ExpirePreviousOTPsParams) error
 	ExpireStaleTokens(ctx context.Context) error
+	GetActiveDeviceSessionByJTI(ctx context.Context, jti pgtype.UUID) (DeviceSession, error)
 	GetDefaultMandate(ctx context.Context, userID pgtype.UUID) (Mandate, error)
 	GetLatestOTPRequest(ctx context.Context, arg GetLatestOTPRequestParams) (OtpRequest, error)
 	GetMandateByID(ctx context.Context, id pgtype.UUID) (Mandate, error)
@@ -42,6 +44,7 @@ type Querier interface {
 	ListPaymentsForAutoRefund(ctx context.Context, arg ListPaymentsForAutoRefundParams) ([]Payment, error)
 	ListStuckPayments(ctx context.Context, arg ListStuckPaymentsParams) ([]Payment, error)
 	ListTrustedMerchants(ctx context.Context, userID pgtype.UUID) ([]ListTrustedMerchantsRow, error)
+	ListUserDeviceSessions(ctx context.Context, userID pgtype.UUID) ([]DeviceSession, error)
 	ListUserLedger(ctx context.Context, arg ListUserLedgerParams) ([]LedgerEntry, error)
 	ListUserMandates(ctx context.Context, userID pgtype.UUID) ([]Mandate, error)
 	ListUserPayments(ctx context.Context, arg ListUserPaymentsParams) ([]Payment, error)
@@ -52,9 +55,12 @@ type Querier interface {
 	MarkPendingLimitApplied(ctx context.Context, id pgtype.UUID) error
 	MarkTokenFailed(ctx context.Context, id pgtype.UUID) (Token, error)
 	MarkTokenSettled(ctx context.Context, arg MarkTokenSettledParams) (Token, error)
+	RevokeAllOtherDeviceSessions(ctx context.Context, arg RevokeAllOtherDeviceSessionsParams) error
+	RevokeDeviceSession(ctx context.Context, arg RevokeDeviceSessionParams) error
 	RevokeMandate(ctx context.Context, arg RevokeMandateParams) error
 	SetDefaultMandate(ctx context.Context, arg SetDefaultMandateParams) (Mandate, error)
 	SumUserSentLast24h(ctx context.Context, senderUserID pgtype.UUID) (int64, error)
+	TouchDeviceSession(ctx context.Context, arg TouchDeviceSessionParams) error
 	UnsetDefaultMandate(ctx context.Context, userID pgtype.UUID) error
 	UpdatePaymentCharge(ctx context.Context, arg UpdatePaymentChargeParams) (Payment, error)
 	UpdatePaymentTransfer(ctx context.Context, arg UpdatePaymentTransferParams) (Payment, error)

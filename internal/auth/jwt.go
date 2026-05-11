@@ -19,6 +19,7 @@ import (
 type Claims struct {
 	UserID    uuid.UUID `json:"sub"`
 	Phone     string    `json:"phone"`
+	JTI       uuid.UUID `json:"jti"` // device-session id; revocation key
 	IssuedAt  int64     `json:"iat"`
 	ExpiresAt int64     `json:"exp"`
 }
@@ -32,11 +33,17 @@ func NewIssuer(secret string, ttl time.Duration) *Issuer {
 	return &Issuer{secret: []byte(secret), ttl: ttl}
 }
 
-func (i *Issuer) Issue(userID uuid.UUID, phone string) (string, error) {
+// Issue mints a new JWT with a fresh JTI (returned alongside so callers
+// can persist a device_session row keyed by it). Two-value return is
+// the only awkward API change from this refactor — every call site has
+// to either store the JTI or discard it explicitly.
+func (i *Issuer) Issue(userID uuid.UUID, phone string) (token string, jti uuid.UUID, err error) {
+	jti = uuid.New()
 	now := time.Now()
 	claims := Claims{
 		UserID:    userID,
 		Phone:     phone,
+		JTI:       jti,
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(i.ttl).Unix(),
 	}
@@ -50,7 +57,7 @@ func (i *Issuer) Issue(userID uuid.UUID, phone string) (string, error) {
 	signingInput := headerSeg + "." + claimsSeg
 
 	sig := i.sign(signingInput)
-	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig), jti, nil
 }
 
 func (i *Issuer) Parse(token string) (*Claims, error) {
