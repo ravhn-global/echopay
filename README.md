@@ -1,20 +1,60 @@
-# Introduction 
-TODO: Give a short introduction of your project. Let this section explain the objectives or the motivation behind this project. 
+# echoApp Backend
 
-# Getting Started
-TODO: Guide users through getting your code up and running on their own system. In this section you can talk about:
-1.	Installation process
-2.	Software dependencies
-3.	Latest releases
-4.	API references
+Payments orchestrator for Echo — a walletless ultrasonic payment app for Nigerian markets.
 
-# Build and Test
-TODO: Describe and show how to build your code and run the tests. 
+## Stack
 
-# Contribute
-TODO: Explain how other users and developers can contribute to make your code better. 
+- **Go 1.26** + Echo (HTTP)
+- **Postgres** via pgx (state, ledger, audit)
+- **Redis** (session tokens with TTL, rate limits)
+- **sqlc** (compile-time-checked SQL)
+- **golang-migrate** (schema migrations)
+- **Paystack** (Direct Debit + Transfers)
 
-If you want to learn more about creating good readme files then refer the following [guidelines](https://docs.microsoft.com/en-us/azure/devops/repos/git/create-a-readme?view=azure-devops). You can also seek inspiration from the below readme files:
-- [ASP.NET Core](https://github.com/aspnet/Home)
-- [Visual Studio Code](https://github.com/Microsoft/vscode)
-- [Chakra Core](https://github.com/Microsoft/ChakraCore)
+## Layout
+
+```
+cmd/server/         Entry point
+internal/
+  config/           Env loading
+  logger/           slog setup
+  db/               pgx pool
+  cache/            Redis client
+  http/             Echo server, middleware, handlers
+  store/            sqlc-generated query code (created by `make sqlc`)
+migrations/         golang-migrate SQL files
+sqlc/               sqlc input (sqlc.yaml + queries/*.sql)
+```
+
+## Setup
+
+1. **Install Go 1.26+**, Postgres, and Redis locally.
+2. Copy `.env.example` to `.env` and fill in connection strings.
+3. Install dev tools (one-time):
+   ```
+   go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+   go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+   ```
+4. Pull deps and run:
+   ```
+   go mod tidy
+   make run
+   ```
+5. Verify: `curl http://localhost:8080/health`
+
+## Common tasks
+
+| Command | Purpose |
+|---|---|
+| `make run` | Run the server with live env |
+| `make build` | Compile to `bin/server` |
+| `make test` | Run tests with race detector |
+| `make lint` | `go vet ./...` |
+| `make sqlc` | Regenerate `internal/store` from `sqlc/queries/*.sql` |
+| `make migrate-create name=add_users` | Scaffold a new migration pair |
+| `make migrate-up` | Apply pending migrations |
+| `make migrate-down` | Roll back one migration |
+
+## Status
+
+**Foundation pass.** Server boots, connects to Postgres + Redis, exposes `/health`. No business logic yet — modules (tokens, payments, ledger, etc.) added in subsequent passes.
