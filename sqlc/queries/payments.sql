@@ -64,3 +64,21 @@ WHERE status IN ('debiting','transferring','settling','initiated')
   AND updated_at < $1
 ORDER BY updated_at ASC
 LIMIT $2;
+
+-- name: ListPaymentsForAutoRefund :many
+SELECT * FROM payments
+WHERE status IN ('debiting','transferring','settling')
+  AND charge_status = 'success'
+  AND auto_refund_reference IS NULL
+  AND created_at < $1
+ORDER BY created_at ASC
+LIMIT $2;
+
+-- name: MarkPaymentAutoRefunded :one
+UPDATE payments
+SET auto_refund_reference = $2,
+    status = 'failed',
+    failure_reason = $3,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;

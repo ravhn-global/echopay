@@ -271,6 +271,37 @@ func (c *Client) VerifyTransfer(ctx context.Context, reference string) (*Transfe
 	return &env.Data, nil
 }
 
+// ---- Refunds (reverse a successful charge back to the sender's card/bank) ----
+
+type RefundRequest struct {
+	Transaction string `json:"transaction"`        // charge reference
+	Amount      int64  `json:"amount,omitempty"`   // kobo; full refund when omitted
+	Currency    string `json:"currency,omitempty"` // NGN
+	CustomerNote string `json:"customer_note,omitempty"`
+	MerchantNote string `json:"merchant_note,omitempty"`
+}
+
+type Refund struct {
+	ID             int64  `json:"id"`
+	TransactionID  int64  `json:"transaction"`
+	Amount         int64  `json:"amount"`
+	Currency       string `json:"currency"`
+	Status         string `json:"status"`
+	Reference      string `json:"refund_reference"`
+	DepositedAt    string `json:"deposited_at"`
+}
+
+func (c *Client) RefundCharge(ctx context.Context, req RefundRequest) (*Refund, error) {
+	if req.Currency == "" {
+		req.Currency = "NGN"
+	}
+	var env envelope[Refund]
+	if err := c.do(ctx, http.MethodPost, "/refund", req, &env); err != nil {
+		return nil, err
+	}
+	return &env.Data, nil
+}
+
 // ---- Bank account resolution ----
 
 type ResolveAccountResponse struct {

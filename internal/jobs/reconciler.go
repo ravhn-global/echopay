@@ -83,7 +83,87 @@ func (r *Reconciler) sweep(ctx context.Context) {
 			r.log.Error("reconcile payment", "id", pgconv.UUIDTo(p.ID), "err", err)
 		}
 	}
+
+	r.attemptAutoRefunds(ctx)
 	r.expireStaleTokens(ctx)
+}
+
+// attemptAutoRefunds finds payments that have been stuck post-charge for
+// >autoRefundAfter (default 24h) and reverses the sender's charge via
+// Paystack. Idempotent — payments with auto_refund_reference set are
+// excluded from the query, and we double-check Paystack's transfer state
+// before refunding in case we just missed the success webhook.
+func (r *Reconciler) attemptAutoRefunds(ctx context.Context) {
+	cutoff := time.Now().Add(-autoRefundAfter)
+	stuck, err := r.q.ListPaymentsForAutoRefund(ctx, store.ListPaymentsForAutoRefundParams{
+		CreatedAt: pgconv.TimeFrom(cutoff),
+		Limit:     reconcileBatchSize,
+	})
+	if err != nil {
+		r.log.Error("list payments for auto-refund failed", "err", err)
+		return
+	}
+	if len(stuck) == 0 {
+		return
+	}
+	r.log.Info("auto-refund candidates", "count", len(stuck))
+
+	for _, p := range stuck {
+		if err := r.autoRefundOne(ctx, p); err != nil {
+			r.log.Error("auto-refund payment", "id", pgconv.UUIDTo(p.ID), "err", err)
+		}
+	}
+}
+
+func (r *Reconciler) autoRefundOne(ctx context.Context, p store.Payment) error {
+	// Double-check the transfer leg hasn't actually succeeded — we may just
+	// have missed a webhook. If Paystack says it landed, reconcile to
+	// settled rather than refunding.
+	if p.TransferReference != nil && *p.TransferReference != "" {
+		verified, err := r.ps.VerifyTransfer(ctx, *p.TransferReference)
+		if err == nil && verified.Status == "success" {
+			if _, mErr := r.q.MarkPaymentSettled(ctx, p.ID); mErr != nil {
+				return mErr
+			}
+			if p.TokenID.Valid {
+				_, _ = r.q.MarkTokenSettled(ctx, store.MarkTokenSettledParams{
+					ID:               p.TokenID,
+					SettledPaymentID: p.ID,
+				})
+			}
+			r.log.Info("auto-refund cancelled: transfer succeeded after all", "id", pgconv.UUIDTo(p.ID))
+			return nil
+		}
+	}
+
+	if p.ChargeReference == nil || *p.ChargeReference == "" {
+		return errors.New("no charge reference to refund")
+	}
+
+	refund, err := r.ps.RefundCharge(ctx, paystack.RefundRequest{
+		Transaction:  *p.ChargeReference,
+		Amount:       p.AmountKobo,
+		MerchantNote: "auto-refund: 24h stuck",
+		CustomerNote: "Echo refund: payment couldn't be delivered",
+	})
+	if err != nil {
+		return err
+	}
+
+	reason := "auto-refunded after 24h stuck"
+	_, err = r.q.MarkPaymentAutoRefunded(ctx, store.MarkPaymentAutoRefundedParams{
+		ID:                  p.ID,
+		AutoRefundReference: &refund.Reference,
+		FailureReason:       &reason,
+	})
+	if err != nil {
+		return err
+	}
+	if p.TokenID.Valid {
+		_, _ = r.q.MarkTokenFailed(ctx, p.TokenID)
+	}
+	r.log.Info("auto-refunded", "id", pgconv.UUIDTo(p.ID), "refund_ref", refund.Reference)
+	return nil
 }
 
 func (r *Reconciler) reconcileOne(ctx context.Context, p store.Payment) error {

@@ -47,23 +47,24 @@ type OtpRequest struct {
 }
 
 type Payment struct {
-	ID                pgtype.UUID        `json:"id"`
-	TokenID           pgtype.UUID        `json:"token_id"`
-	SenderUserID      pgtype.UUID        `json:"sender_user_id"`
-	ReceiverUserID    pgtype.UUID        `json:"receiver_user_id"`
-	SenderMandateID   pgtype.UUID        `json:"sender_mandate_id"`
-	AmountKobo        int64              `json:"amount_kobo"`
-	IdempotencyKey    string             `json:"idempotency_key"`
-	ChargeReference   *string            `json:"charge_reference"`
-	ChargeStatus      *string            `json:"charge_status"`
-	TransferReference *string            `json:"transfer_reference"`
-	TransferStatus    *string            `json:"transfer_status"`
-	Status            string             `json:"status"`
-	FailureReason     *string            `json:"failure_reason"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	SettledAt         pgtype.Timestamptz `json:"settled_at"`
-	RefundsPaymentID  pgtype.UUID        `json:"refunds_payment_id"`
+	ID                  pgtype.UUID        `json:"id"`
+	TokenID             pgtype.UUID        `json:"token_id"`
+	SenderUserID        pgtype.UUID        `json:"sender_user_id"`
+	ReceiverUserID      pgtype.UUID        `json:"receiver_user_id"`
+	SenderMandateID     pgtype.UUID        `json:"sender_mandate_id"`
+	AmountKobo          int64              `json:"amount_kobo"`
+	IdempotencyKey      string             `json:"idempotency_key"`
+	ChargeReference     *string            `json:"charge_reference"`
+	ChargeStatus        *string            `json:"charge_status"`
+	TransferReference   *string            `json:"transfer_reference"`
+	TransferStatus      *string            `json:"transfer_status"`
+	Status              string             `json:"status"`
+	FailureReason       *string            `json:"failure_reason"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	SettledAt           pgtype.Timestamptz `json:"settled_at"`
+	RefundsPaymentID    pgtype.UUID        `json:"refunds_payment_id"`
+	AutoRefundReference *string            `json:"auto_refund_reference"`
 }
 
 type PendingLimitChange struct {

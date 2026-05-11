@@ -39,12 +39,14 @@ type Querier interface {
 	InsertLedgerEntry(ctx context.Context, arg InsertLedgerEntryParams) (LedgerEntry, error)
 	ListDuePendingLimits(ctx context.Context, arg ListDuePendingLimitsParams) ([]PendingLimitChange, error)
 	ListPaymentLedger(ctx context.Context, paymentID pgtype.UUID) ([]LedgerEntry, error)
+	ListPaymentsForAutoRefund(ctx context.Context, arg ListPaymentsForAutoRefundParams) ([]Payment, error)
 	ListStuckPayments(ctx context.Context, arg ListStuckPaymentsParams) ([]Payment, error)
 	ListTrustedMerchants(ctx context.Context, userID pgtype.UUID) ([]ListTrustedMerchantsRow, error)
 	ListUserLedger(ctx context.Context, arg ListUserLedgerParams) ([]LedgerEntry, error)
 	ListUserMandates(ctx context.Context, userID pgtype.UUID) ([]Mandate, error)
 	ListUserPayments(ctx context.Context, arg ListUserPaymentsParams) ([]Payment, error)
 	MarkOTPVerified(ctx context.Context, id pgtype.UUID) error
+	MarkPaymentAutoRefunded(ctx context.Context, arg MarkPaymentAutoRefundedParams) (Payment, error)
 	MarkPaymentFailed(ctx context.Context, arg MarkPaymentFailedParams) (Payment, error)
 	MarkPaymentSettled(ctx context.Context, id pgtype.UUID) (Payment, error)
 	MarkPendingLimitApplied(ctx context.Context, id pgtype.UUID) error

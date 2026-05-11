@@ -17,7 +17,7 @@ INSERT INTO payments (
     amount_kobo, idempotency_key, refunds_payment_id
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id
+RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference
 `
 
 type CreatePaymentParams struct {
@@ -59,12 +59,13 @@ func (q *Queries) CreatePayment(ctx context.Context, arg CreatePaymentParams) (P
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
 
 const getPaymentByChargeReference = `-- name: GetPaymentByChargeReference :one
-SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id FROM payments WHERE charge_reference = $1
+SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference FROM payments WHERE charge_reference = $1
 `
 
 func (q *Queries) GetPaymentByChargeReference(ctx context.Context, chargeReference *string) (Payment, error) {
@@ -88,12 +89,13 @@ func (q *Queries) GetPaymentByChargeReference(ctx context.Context, chargeReferen
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
 
 const getPaymentByID = `-- name: GetPaymentByID :one
-SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id FROM payments WHERE id = $1
+SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference FROM payments WHERE id = $1
 `
 
 func (q *Queries) GetPaymentByID(ctx context.Context, id pgtype.UUID) (Payment, error) {
@@ -117,12 +119,13 @@ func (q *Queries) GetPaymentByID(ctx context.Context, id pgtype.UUID) (Payment, 
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
 
 const getPaymentByIdempotencyKey = `-- name: GetPaymentByIdempotencyKey :one
-SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id FROM payments WHERE idempotency_key = $1
+SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference FROM payments WHERE idempotency_key = $1
 `
 
 func (q *Queries) GetPaymentByIdempotencyKey(ctx context.Context, idempotencyKey string) (Payment, error) {
@@ -146,12 +149,13 @@ func (q *Queries) GetPaymentByIdempotencyKey(ctx context.Context, idempotencyKey
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
 
 const getPaymentByTransferReference = `-- name: GetPaymentByTransferReference :one
-SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id FROM payments WHERE transfer_reference = $1
+SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference FROM payments WHERE transfer_reference = $1
 `
 
 func (q *Queries) GetPaymentByTransferReference(ctx context.Context, transferReference *string) (Payment, error) {
@@ -175,12 +179,67 @@ func (q *Queries) GetPaymentByTransferReference(ctx context.Context, transferRef
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
 
+const listPaymentsForAutoRefund = `-- name: ListPaymentsForAutoRefund :many
+SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference FROM payments
+WHERE status IN ('debiting','transferring','settling')
+  AND charge_status = 'success'
+  AND auto_refund_reference IS NULL
+  AND created_at < $1
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListPaymentsForAutoRefundParams struct {
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Limit     int32              `json:"limit"`
+}
+
+func (q *Queries) ListPaymentsForAutoRefund(ctx context.Context, arg ListPaymentsForAutoRefundParams) ([]Payment, error) {
+	rows, err := q.db.Query(ctx, listPaymentsForAutoRefund, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Payment
+	for rows.Next() {
+		var i Payment
+		if err := rows.Scan(
+			&i.ID,
+			&i.TokenID,
+			&i.SenderUserID,
+			&i.ReceiverUserID,
+			&i.SenderMandateID,
+			&i.AmountKobo,
+			&i.IdempotencyKey,
+			&i.ChargeReference,
+			&i.ChargeStatus,
+			&i.TransferReference,
+			&i.TransferStatus,
+			&i.Status,
+			&i.FailureReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SettledAt,
+			&i.RefundsPaymentID,
+			&i.AutoRefundReference,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStuckPayments = `-- name: ListStuckPayments :many
-SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id FROM payments
+SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference FROM payments
 WHERE status IN ('debiting','transferring','settling','initiated')
   AND updated_at < $1
 ORDER BY updated_at ASC
@@ -219,6 +278,7 @@ func (q *Queries) ListStuckPayments(ctx context.Context, arg ListStuckPaymentsPa
 			&i.UpdatedAt,
 			&i.SettledAt,
 			&i.RefundsPaymentID,
+			&i.AutoRefundReference,
 		); err != nil {
 			return nil, err
 		}
@@ -231,7 +291,7 @@ func (q *Queries) ListStuckPayments(ctx context.Context, arg ListStuckPaymentsPa
 }
 
 const listUserPayments = `-- name: ListUserPayments :many
-SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id FROM payments
+SELECT id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference FROM payments
 WHERE sender_user_id = $1 OR receiver_user_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -270,6 +330,7 @@ func (q *Queries) ListUserPayments(ctx context.Context, arg ListUserPaymentsPara
 			&i.UpdatedAt,
 			&i.SettledAt,
 			&i.RefundsPaymentID,
+			&i.AutoRefundReference,
 		); err != nil {
 			return nil, err
 		}
@@ -281,13 +342,55 @@ func (q *Queries) ListUserPayments(ctx context.Context, arg ListUserPaymentsPara
 	return items, nil
 }
 
+const markPaymentAutoRefunded = `-- name: MarkPaymentAutoRefunded :one
+UPDATE payments
+SET auto_refund_reference = $2,
+    status = 'failed',
+    failure_reason = $3,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference
+`
+
+type MarkPaymentAutoRefundedParams struct {
+	ID                  pgtype.UUID `json:"id"`
+	AutoRefundReference *string     `json:"auto_refund_reference"`
+	FailureReason       *string     `json:"failure_reason"`
+}
+
+func (q *Queries) MarkPaymentAutoRefunded(ctx context.Context, arg MarkPaymentAutoRefundedParams) (Payment, error) {
+	row := q.db.QueryRow(ctx, markPaymentAutoRefunded, arg.ID, arg.AutoRefundReference, arg.FailureReason)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.TokenID,
+		&i.SenderUserID,
+		&i.ReceiverUserID,
+		&i.SenderMandateID,
+		&i.AmountKobo,
+		&i.IdempotencyKey,
+		&i.ChargeReference,
+		&i.ChargeStatus,
+		&i.TransferReference,
+		&i.TransferStatus,
+		&i.Status,
+		&i.FailureReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SettledAt,
+		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
+	)
+	return i, err
+}
+
 const markPaymentFailed = `-- name: MarkPaymentFailed :one
 UPDATE payments
 SET status = 'failed',
     failure_reason = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id
+RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference
 `
 
 type MarkPaymentFailedParams struct {
@@ -316,6 +419,7 @@ func (q *Queries) MarkPaymentFailed(ctx context.Context, arg MarkPaymentFailedPa
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
@@ -326,7 +430,7 @@ SET status = 'settled',
     settled_at = NOW(),
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id
+RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference
 `
 
 func (q *Queries) MarkPaymentSettled(ctx context.Context, id pgtype.UUID) (Payment, error) {
@@ -350,6 +454,7 @@ func (q *Queries) MarkPaymentSettled(ctx context.Context, id pgtype.UUID) (Payme
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
@@ -361,7 +466,7 @@ SET charge_reference = $2,
     status = $4,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id
+RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference
 `
 
 type UpdatePaymentChargeParams struct {
@@ -397,6 +502,7 @@ func (q *Queries) UpdatePaymentCharge(ctx context.Context, arg UpdatePaymentChar
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
@@ -408,7 +514,7 @@ SET transfer_reference = $2,
     status = $4,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id
+RETURNING id, token_id, sender_user_id, receiver_user_id, sender_mandate_id, amount_kobo, idempotency_key, charge_reference, charge_status, transfer_reference, transfer_status, status, failure_reason, created_at, updated_at, settled_at, refunds_payment_id, auto_refund_reference
 `
 
 type UpdatePaymentTransferParams struct {
@@ -444,6 +550,7 @@ func (q *Queries) UpdatePaymentTransfer(ctx context.Context, arg UpdatePaymentTr
 		&i.UpdatedAt,
 		&i.SettledAt,
 		&i.RefundsPaymentID,
+		&i.AutoRefundReference,
 	)
 	return i, err
 }
