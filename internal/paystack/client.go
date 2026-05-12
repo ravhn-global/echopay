@@ -27,12 +27,14 @@ const baseURL = "https://api.paystack.co"
 type Client struct {
 	secretKey string
 	http      *http.Client
+	Health    *Health // exported so /v1/status can read snapshots
 }
 
 func New(secretKey string) *Client {
 	return &Client{
 		secretKey: secretKey,
 		http:      &http.Client{Timeout: 30 * time.Second},
+		Health:    NewHealth(5*time.Minute, 512),
 	}
 }
 
@@ -62,12 +64,17 @@ func IsRetryable(err error) bool {
 	return err != nil
 }
 
-func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+func (c *Client) do(ctx context.Context, method, path string, body, out any) (err error) {
+	// Health tracking — every call records its outcome. 4xx is counted as
+	// a failure on Paystack's side (charge declines etc. show up here too);
+	// from the user's perspective the rail is wobbly either way.
+	defer func() { c.Health.record(err == nil) }()
+
 	var reader io.Reader
 	if body != nil {
-		buf, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("marshal body: %w", err)
+		buf, mErr := json.Marshal(body)
+		if mErr != nil {
+			return fmt.Errorf("marshal body: %w", mErr)
 		}
 		reader = bytes.NewReader(buf)
 	}
@@ -94,7 +101,8 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		if json.Unmarshal(respBody, &env) == nil {
 			msg = env.Message
 		}
-		return &APIError{StatusCode: resp.StatusCode, Message: msg, Body: string(respBody)}
+		err = &APIError{StatusCode: resp.StatusCode, Message: msg, Body: string(respBody)}
+		return err
 	}
 
 	if out != nil {
