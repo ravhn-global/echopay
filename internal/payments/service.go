@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ravhn/echoapp-backend/internal/audit"
 	"github.com/ravhn/echoapp-backend/internal/ledger"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
@@ -52,6 +53,7 @@ type Service struct {
 	trusted *risk.TrustedService
 	ps      *paystack.Client
 	push    *push.Service
+	audit   *audit.Service
 	log     *slog.Logger
 }
 
@@ -62,11 +64,12 @@ func NewService(
 	trustedSvc *risk.TrustedService,
 	ps *paystack.Client,
 	pushSvc *push.Service,
+	auditSvc *audit.Service,
 	log *slog.Logger,
 ) *Service {
 	return &Service{
 		q: q, tokens: tokensSvc, ledger: ledgerSvc, trusted: trustedSvc,
-		ps: ps, push: pushSvc, log: log,
+		ps: ps, push: pushSvc, audit: auditSvc, log: log,
 	}
 }
 
@@ -267,6 +270,33 @@ func (s *Service) orchestrate(
 	}
 	s.push.NotifyPaymentReceived(ctx, settled, senderName)
 
+	// Audit on both sides — each user reads their own trail with a simple
+	// WHERE user_id = ?.
+	senderID := pgconv.UUIDTo(settled.SenderUserID)
+	receiverID := pgconv.UUIDTo(settled.ReceiverUserID)
+	pid := pgconv.UUIDTo(settled.ID).String()
+	for _, side := range []struct {
+		userID uuid.UUID
+		role   string
+	}{{senderID, "sender"}, {receiverID, "receiver"}} {
+		counterparty := senderID
+		if side.userID == senderID {
+			counterparty = receiverID
+		}
+		s.audit.Record(ctx, audit.Event{
+			UserID:    side.userID,
+			ActorID:   senderID,
+			Action:    audit.ActionPaymentSettled,
+			TargetTyp: "payment",
+			TargetID:  pid,
+			Metadata: map[string]any{
+				"amount_kobo":  settled.AmountKobo,
+				"role":         side.role,
+				"counterparty": counterparty.String(),
+			},
+		})
+	}
+
 	return settled, nil
 }
 
@@ -382,6 +412,14 @@ func (s *Service) fail(ctx context.Context, p store.Payment, tok *store.Token, r
 			s.log.Error("mark token failed", "err", err)
 		}
 	}
+	s.audit.Record(ctx, audit.Event{
+		UserID:    pgconv.UUIDTo(p.SenderUserID),
+		ActorID:   pgconv.UUIDTo(p.SenderUserID),
+		Action:    audit.ActionPaymentFailed,
+		TargetTyp: "payment",
+		TargetID:  pgconv.UUIDTo(p.ID).String(),
+		Metadata:  map[string]any{"amount_kobo": p.AmountKobo, "reason": reason},
+	})
 	return errors.New(reason)
 }
 

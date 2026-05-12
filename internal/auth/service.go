@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ravhn/echoapp-backend/internal/audit"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
 	"github.com/ravhn/echoapp-backend/internal/push"
 	"github.com/ravhn/echoapp-backend/internal/store"
@@ -32,11 +33,12 @@ type Service struct {
 	q      store.Querier
 	issuer *Issuer
 	push   *push.Service
+	audit  *audit.Service
 	log    *slog.Logger
 }
 
-func NewService(q store.Querier, issuer *Issuer, pushSvc *push.Service, log *slog.Logger) *Service {
-	return &Service{q: q, issuer: issuer, push: pushSvc, log: log}
+func NewService(q store.Querier, issuer *Issuer, pushSvc *push.Service, auditSvc *audit.Service, log *slog.Logger) *Service {
+	return &Service{q: q, issuer: issuer, push: pushSvc, audit: auditSvc, log: log}
 }
 
 // RequestOTP generates a fresh OTP, expires any pending ones for the same
@@ -160,6 +162,19 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, purpose, code string, de
 		}
 		s.push.NotifyNewDeviceLogin(ctx, pgconv.UUIDTo(user.ID), pgconv.UUIDTo(session.ID), deviceLabel)
 	}
+
+	s.audit.Record(ctx, audit.Event{
+		UserID:    pgconv.UUIDTo(user.ID),
+		ActorID:   pgconv.UUIDTo(user.ID),
+		Action:    audit.ActionAuthSignin,
+		TargetTyp: "device_session",
+		TargetID:  pgconv.UUIDTo(session.ID).String(),
+		Metadata: map[string]any{
+			"is_new_user": isNew,
+			"device":      device.Model,
+			"os":          device.OSName,
+		},
+	})
 
 	return &VerifyResult{Token: token, User: user, IsNew: isNew, Session: session}, nil
 }

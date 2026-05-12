@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	"github.com/ravhn/echoapp-backend/internal/audit"
 	"github.com/ravhn/echoapp-backend/internal/auth"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
@@ -21,6 +22,7 @@ type meHandler struct {
 	ps      *paystack.Client
 	limits  *risk.LimitsService
 	push    *push.Service
+	audit   *audit.Service
 }
 
 func (h *meHandler) mount(g *echo.Group) {
@@ -46,6 +48,13 @@ func (h *meHandler) lock(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	h.push.NotifyAccountLocked(c.Request().Context(), userID)
+	h.audit.Record(c.Request().Context(), audit.Event{
+		UserID:    userID,
+		ActorID:   userID,
+		Action:    audit.ActionAccountLocked,
+		IP:        c.RealIP(),
+		UserAgent: c.Request().UserAgent(),
+	})
 	currentJTI := JTIFrom(c)
 	if session, err := h.q.GetActiveDeviceSessionByJTI(
 		c.Request().Context(), pgconv.UUIDFrom(currentJTI),
@@ -161,5 +170,21 @@ func (h *meHandler) setLimits(c echo.Context) error {
 			"applies_at":         pgconv.TimeTo(outcome.Pending.AppliesAt).Unix(),
 		}
 	}
+
+	action := audit.ActionLimitsScheduled
+	if outcome.Applied {
+		action = audit.ActionLimitsAppliedNow
+	}
+	h.audit.Record(c.Request().Context(), audit.Event{
+		UserID:    userID,
+		ActorID:   userID,
+		Action:    action,
+		IP:        c.RealIP(),
+		UserAgent: c.Request().UserAgent(),
+		Metadata: map[string]any{
+			"per_tx_limit_kobo":  body.PerTxLimitKobo,
+			"per_day_limit_kobo": body.PerDayLimitKobo,
+		},
+	})
 	return c.JSON(http.StatusOK, resp)
 }
