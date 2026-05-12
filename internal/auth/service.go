@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
+	"github.com/ravhn/echoapp-backend/internal/push"
 	"github.com/ravhn/echoapp-backend/internal/store"
 )
 
@@ -30,11 +31,12 @@ const (
 type Service struct {
 	q      store.Querier
 	issuer *Issuer
+	push   *push.Service
 	log    *slog.Logger
 }
 
-func NewService(q store.Querier, issuer *Issuer, log *slog.Logger) *Service {
-	return &Service{q: q, issuer: issuer, log: log}
+func NewService(q store.Querier, issuer *Issuer, pushSvc *push.Service, log *slog.Logger) *Service {
+	return &Service{q: q, issuer: issuer, push: pushSvc, log: log}
 }
 
 // RequestOTP generates a fresh OTP, expires any pending ones for the same
@@ -147,6 +149,16 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, purpose, code string, de
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create device session: %w", err)
+	}
+
+	// Suspicious-login push to every OTHER session — design's "New device
+	// signed in" alert. Skipped for brand-new users (no other devices yet).
+	if !isNew {
+		deviceLabel := device.Model
+		if deviceLabel == "" {
+			deviceLabel = "an unknown device"
+		}
+		s.push.NotifyNewDeviceLogin(ctx, pgconv.UUIDTo(user.ID), pgconv.UUIDTo(session.ID), deviceLabel)
 	}
 
 	return &VerifyResult{Token: token, User: user, IsNew: isNew, Session: session}, nil

@@ -27,6 +27,7 @@ import (
 	"github.com/ravhn/echoapp-backend/internal/ledger"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
+	"github.com/ravhn/echoapp-backend/internal/push"
 	"github.com/ravhn/echoapp-backend/internal/risk"
 	"github.com/ravhn/echoapp-backend/internal/store"
 	"github.com/ravhn/echoapp-backend/internal/tokens"
@@ -50,6 +51,7 @@ type Service struct {
 	ledger  *ledger.Service
 	trusted *risk.TrustedService
 	ps      *paystack.Client
+	push    *push.Service
 	log     *slog.Logger
 }
 
@@ -59,9 +61,13 @@ func NewService(
 	ledgerSvc *ledger.Service,
 	trustedSvc *risk.TrustedService,
 	ps *paystack.Client,
+	pushSvc *push.Service,
 	log *slog.Logger,
 ) *Service {
-	return &Service{q: q, tokens: tokensSvc, ledger: ledgerSvc, trusted: trustedSvc, ps: ps, log: log}
+	return &Service{
+		q: q, tokens: tokensSvc, ledger: ledgerSvc, trusted: trustedSvc,
+		ps: ps, push: pushSvc, log: log,
+	}
 }
 
 type CreateRequest struct {
@@ -250,6 +256,17 @@ func (s *Service) orchestrate(
 			return store.Payment{}, fmt.Errorf("mark token settled: %w", err)
 		}
 	}
+
+	// "Payment received" push to the receiver. Fire-and-forget — failure
+	// here doesn't roll back the settled state.
+	senderName := "Someone"
+	if sender.FullName != nil && *sender.FullName != "" {
+		senderName = *sender.FullName
+	} else if sender.Phone != "" {
+		senderName = sender.Phone
+	}
+	s.push.NotifyPaymentReceived(ctx, settled, senderName)
+
 	return settled, nil
 }
 

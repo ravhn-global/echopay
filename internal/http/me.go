@@ -10,6 +10,7 @@ import (
 	"github.com/ravhn/echoapp-backend/internal/auth"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
+	"github.com/ravhn/echoapp-backend/internal/push"
 	"github.com/ravhn/echoapp-backend/internal/risk"
 	"github.com/ravhn/echoapp-backend/internal/store"
 )
@@ -19,6 +20,7 @@ type meHandler struct {
 	q       store.Querier
 	ps      *paystack.Client
 	limits  *risk.LimitsService
+	push    *push.Service
 }
 
 func (h *meHandler) mount(g *echo.Group) {
@@ -43,6 +45,7 @@ func (h *meHandler) lock(c echo.Context) error {
 	}); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
+	h.push.NotifyAccountLocked(c.Request().Context(), userID)
 	currentJTI := JTIFrom(c)
 	if session, err := h.q.GetActiveDeviceSessionByJTI(
 		c.Request().Context(), pgconv.UUIDFrom(currentJTI),

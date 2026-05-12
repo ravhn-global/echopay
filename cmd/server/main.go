@@ -17,6 +17,7 @@ import (
 	"github.com/ravhn/echoapp-backend/internal/jobs"
 	"github.com/ravhn/echoapp-backend/internal/logger"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
+	"github.com/ravhn/echoapp-backend/internal/push"
 	"github.com/ravhn/echoapp-backend/internal/store"
 )
 
@@ -49,7 +50,17 @@ func main() {
 	defer rdb.Close()
 	log.Info("redis connected")
 
-	srv := httpsrv.New(cfg, log, pool, rdb)
+	pushSvc, err := push.NewService(
+		ctx, store.New(pool),
+		cfg.FCMProjectID, cfg.FCMCredentialsFile, cfg.FCMCredentialsJSON,
+		log,
+	)
+	if err != nil {
+		log.Error("push service init failed", "err", err)
+		os.Exit(1)
+	}
+
+	srv := httpsrv.New(cfg, log, pool, rdb, pushSvc)
 
 	// Background reconciler — re-uses the same Querier and Paystack client
 	// the HTTP server uses. Idempotent operations keep it safe to run

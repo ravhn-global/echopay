@@ -17,6 +17,7 @@ import (
 	"github.com/ravhn/echoapp-backend/internal/mandates"
 	"github.com/ravhn/echoapp-backend/internal/payments"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
+	"github.com/ravhn/echoapp-backend/internal/push"
 	"github.com/ravhn/echoapp-backend/internal/risk"
 	"github.com/ravhn/echoapp-backend/internal/store"
 	"github.com/ravhn/echoapp-backend/internal/tokens"
@@ -29,7 +30,7 @@ type Server struct {
 	LimitsSvc   *risk.LimitsService   // exposed so main can apply due pending limits
 }
 
-func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client) *Server {
+func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Client, pushSvc *push.Service) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -46,7 +47,7 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	ps := paystack.New(cfg.PaystackSecretKey)
 	jwtIssuer := auth.NewIssuer(cfg.JWTSecret, cfg.JWTTTL)
 
-	authSvc := auth.NewService(queries, jwtIssuer, log)
+	authSvc := auth.NewService(queries, jwtIssuer, pushSvc, log)
 
 	var kycProvider kyc.Provider = kyc.StubProvider{}
 	if cfg.KYCProvider == "youverify" && cfg.YouVerifyAPIKey != "" {
@@ -63,7 +64,7 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	ledgerSvc := ledger.NewService(queries)
 	trustedSvc := risk.NewTrustedService(queries)
 	limitsSvc := risk.NewLimitsService(queries, cfg.RiskLimitRaiseCooldown, log)
-	paymentsSvc := payments.NewService(queries, tokensSvc, ledgerSvc, trustedSvc, ps, log)
+	paymentsSvc := payments.NewService(queries, tokensSvc, ledgerSvc, trustedSvc, ps, pushSvc, log)
 
 	// Webhooks (public, signature-verified).
 	(&webhookHandler{
@@ -91,13 +92,14 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 		AuthMiddleware(jwtIssuer, queries),
 		apiLimit.Middleware(UserIDSubject),
 	)
-	(&meHandler{authSvc: authSvc, q: queries, ps: ps, limits: limitsSvc}).mount(v1Auth)
+	(&meHandler{authSvc: authSvc, q: queries, ps: ps, limits: limitsSvc, push: pushSvc}).mount(v1Auth)
 	kyc.NewHandler(kycSvc, UserIDFrom).Mount(v1Auth)
 	mandates.NewHandler(mandatesSvc, UserIDFrom).Mount(v1Auth)
 	tokens.NewHandler(tokensSvc, UserIDFrom).Mount(v1Auth)
 	payments.NewHandler(paymentsSvc, UserIDFrom).Mount(v1Auth)
 	risk.NewHandler(limitsSvc, trustedSvc, UserIDFrom).Mount(v1Auth)
 	(&devicesHandler{q: queries}).mount(v1Auth)
+	push.NewHandler(queries, UserIDFrom, JTIFrom).Mount(v1Auth)
 
 	return &Server{e: e, log: log, PaymentsSvc: paymentsSvc, LimitsSvc: limitsSvc}
 }

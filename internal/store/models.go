@@ -92,6 +92,17 @@ type PendingLimitChange struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
+type PushToken struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	DeviceSessionID pgtype.UUID        `json:"device_session_id"`
+	FcmToken        string             `json:"fcm_token"`
+	Platform        string             `json:"platform"`
+	LastSeenAt      pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	RevokedAt       pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type Token struct {
 	ID               pgtype.UUID        `json:"id"`
 	Code             string             `json:"code"`

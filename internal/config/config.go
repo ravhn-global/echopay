@@ -36,9 +36,17 @@ type Config struct {
 	// KYC provider — "stub" (default; format checks only) or "youverify".
 	// Switch to "youverify" once you have a sandbox key from
 	// https://app.youverify.co. Production base URL is the no-sandbox host.
-	KYCProvider       string `env:"KYC_PROVIDER" envDefault:"stub"`
-	YouVerifyBaseURL  string `env:"YOUVERIFY_BASE_URL" envDefault:"https://api.sandbox.youverify.co"`
-	YouVerifyAPIKey   string `env:"YOUVERIFY_API_KEY"`
+	KYCProvider      string `env:"KYC_PROVIDER" envDefault:"stub"`
+	YouVerifyBaseURL string `env:"YOUVERIFY_BASE_URL" envDefault:"https://api.sandbox.youverify.co"`
+	YouVerifyAPIKey  string `env:"YOUVERIFY_API_KEY"`
+
+	// Firebase Cloud Messaging. Leave creds empty for dev — push.Service
+	// no-ops without them. FCM_CREDENTIALS_FILE points at the service-
+	// account JSON (Firebase Console → Project Settings → Service accounts);
+	// FCM_CREDENTIALS_JSON is an inline alternative.
+	FCMProjectID       string `env:"FCM_PROJECT_ID"`
+	FCMCredentialsFile string `env:"FCM_CREDENTIALS_FILE"`
+	FCMCredentialsJSON string `env:"FCM_CREDENTIALS_JSON"`
 }
 
 func (c *Config) IsDev() bool {

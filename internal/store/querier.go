@@ -48,6 +48,8 @@ type Querier interface {
 	ListUserLedger(ctx context.Context, arg ListUserLedgerParams) ([]LedgerEntry, error)
 	ListUserMandates(ctx context.Context, userID pgtype.UUID) ([]Mandate, error)
 	ListUserPayments(ctx context.Context, arg ListUserPaymentsParams) ([]Payment, error)
+	ListUserPushTokens(ctx context.Context, userID pgtype.UUID) ([]PushToken, error)
+	ListUserPushTokensExceptSession(ctx context.Context, arg ListUserPushTokensExceptSessionParams) ([]PushToken, error)
 	MarkOTPVerified(ctx context.Context, id pgtype.UUID) error
 	MarkPaymentAutoRefunded(ctx context.Context, arg MarkPaymentAutoRefundedParams) (Payment, error)
 	MarkPaymentFailed(ctx context.Context, arg MarkPaymentFailedParams) (Payment, error)
@@ -58,6 +60,8 @@ type Querier interface {
 	RevokeAllOtherDeviceSessions(ctx context.Context, arg RevokeAllOtherDeviceSessionsParams) error
 	RevokeDeviceSession(ctx context.Context, arg RevokeDeviceSessionParams) error
 	RevokeMandate(ctx context.Context, arg RevokeMandateParams) error
+	RevokePushToken(ctx context.Context, fcmToken string) error
+	RevokePushTokensForSession(ctx context.Context, deviceSessionID pgtype.UUID) error
 	SetDefaultMandate(ctx context.Context, arg SetDefaultMandateParams) (Mandate, error)
 	SetUserStatus(ctx context.Context, arg SetUserStatusParams) (User, error)
 	SumUserSentLast24h(ctx context.Context, senderUserID pgtype.UUID) (int64, error)
@@ -68,6 +72,7 @@ type Querier interface {
 	UpdateUserKYC(ctx context.Context, arg UpdateUserKYCParams) (User, error)
 	UpdateUserLimits(ctx context.Context, arg UpdateUserLimitsParams) (User, error)
 	UpdateUserReceiveAccount(ctx context.Context, arg UpdateUserReceiveAccountParams) (User, error)
+	UpsertPushToken(ctx context.Context, arg UpsertPushTokenParams) (PushToken, error)
 	UpsertTrustedMerchant(ctx context.Context, arg UpsertTrustedMerchantParams) (TrustedMerchant, error)
 }
 
