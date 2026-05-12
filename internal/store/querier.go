@@ -37,10 +37,16 @@ type Querier interface {
 	GetTrustedMerchantCap(ctx context.Context, arg GetTrustedMerchantCapParams) (int64, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	GetUserByPhone(ctx context.Context, phone string) (User, error)
+	// Conditional on status=transferring so the held path never trips a payment
+	// that's already moved through the normal flow.
+	HoldPayment(ctx context.Context, arg HoldPaymentParams) (Payment, error)
 	IncrementOTPAttempts(ctx context.Context, id pgtype.UUID) (OtpRequest, error)
 	InsertAuditEvent(ctx context.Context, arg InsertAuditEventParams) (AuditEvent, error)
 	InsertLedgerEntry(ctx context.Context, arg InsertLedgerEntryParams) (LedgerEntry, error)
 	ListDuePendingLimits(ctx context.Context, arg ListDuePendingLimitsParams) ([]PendingLimitChange, error)
+	// For the reconciler safety net — picks up holds where the in-process
+	// timer was lost across a restart.
+	ListExpiredHolds(ctx context.Context, arg ListExpiredHoldsParams) ([]Payment, error)
 	ListPaymentLedger(ctx context.Context, paymentID pgtype.UUID) ([]LedgerEntry, error)
 	ListPaymentsForAutoRefund(ctx context.Context, arg ListPaymentsForAutoRefundParams) ([]Payment, error)
 	ListStuckPayments(ctx context.Context, arg ListStuckPaymentsParams) ([]Payment, error)
@@ -55,10 +61,16 @@ type Querier interface {
 	MarkOTPVerified(ctx context.Context, id pgtype.UUID) error
 	MarkPaymentAutoRefunded(ctx context.Context, arg MarkPaymentAutoRefundedParams) (Payment, error)
 	MarkPaymentFailed(ctx context.Context, arg MarkPaymentFailedParams) (Payment, error)
+	// Conditional on status=held so undo can't fire after the hold has been
+	// released into transfer.
+	MarkPaymentRefunded(ctx context.Context, arg MarkPaymentRefundedParams) (Payment, error)
 	MarkPaymentSettled(ctx context.Context, id pgtype.UUID) (Payment, error)
 	MarkPendingLimitApplied(ctx context.Context, id pgtype.UUID) error
 	MarkTokenFailed(ctx context.Context, id pgtype.UUID) (Token, error)
 	MarkTokenSettled(ctx context.Context, arg MarkTokenSettledParams) (Token, error)
+	// Conditional on status=held so the undo path and the release path don't
+	// both try to advance the payment. Whoever wins the UPDATE proceeds.
+	ReleaseHeldPayment(ctx context.Context, id pgtype.UUID) (Payment, error)
 	RevokeAllOtherDeviceSessions(ctx context.Context, arg RevokeAllOtherDeviceSessionsParams) error
 	RevokeDeviceSession(ctx context.Context, arg RevokeDeviceSessionParams) error
 	RevokeMandate(ctx context.Context, arg RevokeMandateParams) error

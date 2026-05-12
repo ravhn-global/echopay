@@ -62,13 +62,15 @@ func main() {
 
 	srv := httpsrv.New(cfg, log, pool, rdb, pushSvc)
 
-	// Background reconciler — re-uses the same Querier and Paystack client
-	// the HTTP server uses. Idempotent operations keep it safe to run
-	// concurrent with the HTTP path. Also applies due limit-raise changes.
+	// Background reconciler — slow tick for stuck Paystack flows and due
+	// limit-raise changes, fast tick for held-payment releases that lost
+	// their in-process timer across a restart. Idempotent operations keep
+	// it safe to run concurrent with the HTTP path.
 	reconciler := jobs.NewReconciler(
 		store.New(pool),
 		paystack.New(cfg.PaystackSecretKey),
 		srv.LimitsSvc,
+		srv.PaymentsSvc,
 		log,
 	)
 	go reconciler.Run(ctx)

@@ -92,6 +92,7 @@ type Payment struct {
 	SettledAt           pgtype.Timestamptz `json:"settled_at"`
 	RefundsPaymentID    pgtype.UUID        `json:"refunds_payment_id"`
 	AutoRefundReference *string            `json:"auto_refund_reference"`
+	HoldExpiresAt       pgtype.Timestamptz `json:"hold_expires_at"`
 }
 
 type PendingLimitChange struct {

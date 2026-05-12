@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -25,6 +26,7 @@ func (h *Handler) Mount(g *echo.Group) {
 	g.POST("/payments", h.create)
 	g.GET("/payments/:id", h.get)
 	g.POST("/payments/:id/refund", h.refund)
+	g.POST("/payments/:id/undo", h.undo)
 	g.GET("/activity", h.activity)
 }
 
@@ -32,6 +34,12 @@ type createBody struct {
 	TokenCode      string `json:"token_code"`
 	MandateID      string `json:"mandate_id"`
 	IdempotencyKey string `json:"idempotency_key"`
+	// Optional — when present and > 0, server holds the transfer for this
+	// many seconds and exposes hold_expires_at on the response. The client
+	// uses its own threshold to decide whether to request a hold; the
+	// server doesn't enforce the threshold (clients differ in their
+	// configurable prefs).
+	UndoWindowSeconds int `json:"undo_window_seconds"`
 }
 
 func (h *Handler) create(c echo.Context) error {
@@ -51,11 +59,16 @@ func (h *Handler) create(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid mandate_id")
 	}
 
+	var window time.Duration
+	if body.UndoWindowSeconds > 0 && body.UndoWindowSeconds <= 60 {
+		window = time.Duration(body.UndoWindowSeconds) * time.Second
+	}
 	res, err := h.svc.Create(c.Request().Context(), CreateRequest{
 		SenderUserID:   userID,
 		TokenCode:      body.TokenCode,
 		MandateID:      mandateID,
 		IdempotencyKey: body.IdempotencyKey,
+		UndoWindow:     window,
 	})
 	if err != nil {
 		switch {
@@ -142,6 +155,34 @@ func (h *Handler) refund(c echo.Context) error {
 	return c.JSON(http.StatusCreated, toJSON(res.Payment))
 }
 
+func (h *Handler) undo(c echo.Context) error {
+	userID := h.userIDFn(c)
+	if userID == uuid.Nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "no user")
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid payment id")
+	}
+	updated, err := h.svc.Undo(c.Request().Context(), UndoRequest{
+		PaymentID: id,
+		CallerID:  userID,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotSender):
+			return echo.NewHTTPError(http.StatusForbidden, err.Error())
+		case errors.Is(err, ErrUndoWindowClosed):
+			return echo.NewHTTPError(http.StatusGone, err.Error())
+		case errors.Is(err, ErrUndoUnavailable):
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		default:
+			return echo.NewHTTPError(http.StatusBadGateway, err.Error())
+		}
+	}
+	return c.JSON(http.StatusOK, toJSON(updated))
+}
+
 func (h *Handler) activity(c echo.Context) error {
 	userID := h.userIDFn(c)
 	if userID == uuid.Nil {
@@ -166,17 +207,21 @@ func (h *Handler) activity(c echo.Context) error {
 }
 
 func toJSON(p store.Payment) map[string]any {
-	return map[string]any{
-		"id":              pgconv.UUIDTo(p.ID).String(),
-		"token_id":        pgconv.UUIDTo(p.TokenID).String(),
-		"sender_user_id":  pgconv.UUIDTo(p.SenderUserID).String(),
+	out := map[string]any{
+		"id":               pgconv.UUIDTo(p.ID).String(),
+		"token_id":         pgconv.UUIDTo(p.TokenID).String(),
+		"sender_user_id":   pgconv.UUIDTo(p.SenderUserID).String(),
 		"receiver_user_id": pgconv.UUIDTo(p.ReceiverUserID).String(),
-		"amount_kobo":     p.AmountKobo,
-		"status":          p.Status,
-		"charge_status":   p.ChargeStatus,
-		"transfer_status": p.TransferStatus,
-		"failure_reason":  p.FailureReason,
-		"created_at":      pgconv.TimeTo(p.CreatedAt),
-		"settled_at":      pgconv.TimeTo(p.SettledAt),
+		"amount_kobo":      p.AmountKobo,
+		"status":           p.Status,
+		"charge_status":    p.ChargeStatus,
+		"transfer_status":  p.TransferStatus,
+		"failure_reason":   p.FailureReason,
+		"created_at":       pgconv.TimeTo(p.CreatedAt),
+		"settled_at":       pgconv.TimeTo(p.SettledAt),
 	}
+	if p.HoldExpiresAt.Valid {
+		out["hold_expires_at"] = pgconv.TimeTo(p.HoldExpiresAt).Unix()
+	}
+	return out
 }

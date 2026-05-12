@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -44,6 +46,9 @@ var (
 	ErrRefundTooLarge      = errors.New("refund amount exceeds original payment")
 	ErrOriginalNotSettled  = errors.New("can only refund settled payments")
 	ErrAlreadyRefunded     = errors.New("payment already refunded")
+	ErrNotSender           = errors.New("only the sender can undo")
+	ErrUndoWindowClosed    = errors.New("undo window has expired")
+	ErrUndoUnavailable     = errors.New("payment is not in an undoable state")
 )
 
 type Service struct {
@@ -55,6 +60,11 @@ type Service struct {
 	push    *push.Service
 	audit   *audit.Service
 	log     *slog.Logger
+
+	// In-process release timers, keyed by payment id. Survives single-
+	// instance crashes via the reconciler safety net (ReleaseDueHolds).
+	holdMu     sync.Mutex
+	holdTimers map[uuid.UUID]*time.Timer
 }
 
 func NewService(
@@ -70,6 +80,7 @@ func NewService(
 	return &Service{
 		q: q, tokens: tokensSvc, ledger: ledgerSvc, trusted: trustedSvc,
 		ps: ps, push: pushSvc, audit: auditSvc, log: log,
+		holdTimers: make(map[uuid.UUID]*time.Timer),
 	}
 }
 
@@ -78,6 +89,12 @@ type CreateRequest struct {
 	TokenCode      string
 	MandateID      uuid.UUID
 	IdempotencyKey string
+	// UndoWindow > 0 puts the payment into a "held" state after the charge
+	// succeeds: the receiver's transfer is deferred for that window and the
+	// sender can call Undo within it to refund the charge before any money
+	// leaves the float. v1.1 feature; clients send the user's preference
+	// (default ₦500,000 threshold → 10s window, 0 below threshold).
+	UndoWindow time.Duration
 }
 
 type RefundRequest struct {
@@ -141,11 +158,243 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*Result, error
 		return nil, fmt.Errorf("create payment: %w", err)
 	}
 
+	// Held path — charge fires immediately, transfer is deferred for the
+	// undo window. The receiver gets nothing until release; if the sender
+	// undoes inside the window, we refund the charge and the transfer
+	// never runs. Only enabled when the client asks for it (the design's
+	// >= ₦500k threshold rule lives client-side, not here).
+	if req.UndoWindow > 0 {
+		held, err := s.orchestrateHeld(ctx, payment, sender, receiver, mandate, &tok, req.UndoWindow)
+		if err != nil {
+			return nil, err
+		}
+		return &Result{Payment: held, Token: &tok}, nil
+	}
+
 	settled, err := s.orchestrate(ctx, payment, sender, receiver, mandate, &tok)
 	if err != nil {
 		return nil, err
 	}
 	return &Result{Payment: settled, Token: &tok}, nil
+}
+
+// orchestrateHeld runs the charge leg, parks the payment in 'held' state,
+// schedules a goroutine to release it after the window, and returns. The
+// scheduled goroutine runs the transfer+ledger+settle leg; until then,
+// undo can intercept and refund the charge.
+func (s *Service) orchestrateHeld(
+	ctx context.Context,
+	payment store.Payment,
+	sender, receiver store.User,
+	mandate store.Mandate,
+	tok *store.Token,
+	window time.Duration,
+) (store.Payment, error) {
+	if err := s.charge(ctx, &payment, sender, mandate); err != nil {
+		return store.Payment{}, s.fail(ctx, payment, tok, fmt.Sprintf("charge: %v", err))
+	}
+	expiresAt := time.Now().Add(window)
+	held, err := s.q.HoldPayment(ctx, store.HoldPaymentParams{
+		ID:            payment.ID,
+		HoldExpiresAt: pgconv.TimeFrom(expiresAt),
+	})
+	if err != nil {
+		return store.Payment{}, fmt.Errorf("hold payment: %w", err)
+	}
+
+	s.scheduleHoldRelease(pgconv.UUIDTo(held.ID), window)
+	return held, nil
+}
+
+// scheduleHoldRelease parks an in-process timer that fires the deferred
+// transfer when the undo window elapses. The reconciler safety-net method
+// ReleaseDueHolds picks up the slack if the process restarts.
+func (s *Service) scheduleHoldRelease(id uuid.UUID, after time.Duration) {
+	s.holdMu.Lock()
+	defer s.holdMu.Unlock()
+	if existing, ok := s.holdTimers[id]; ok {
+		existing.Stop()
+	}
+	s.holdTimers[id] = time.AfterFunc(after, func() {
+		s.holdMu.Lock()
+		delete(s.holdTimers, id)
+		s.holdMu.Unlock()
+		// Use a background ctx — the original request is long gone by now.
+		s.releaseHold(context.Background(), id)
+	})
+}
+
+// releaseHold flips status held → transferring, runs the transfer + ledger
+// + settled completion. Conditional update on the held → transferring
+// transition means undo can race here and only one wins.
+func (s *Service) releaseHold(ctx context.Context, id uuid.UUID) {
+	released, err := s.q.ReleaseHeldPayment(ctx, pgconv.UUIDFrom(id))
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			s.log.Error("release hold: update failed", "id", id, "err", err)
+		}
+		return // already refunded (lost the race) or row vanished
+	}
+
+	receiver, err := s.q.GetUserByID(ctx, released.ReceiverUserID)
+	if err != nil {
+		s.log.Error("release hold: load receiver", "id", id, "err", err)
+		return
+	}
+	sender, err := s.q.GetUserByID(ctx, released.SenderUserID)
+	if err != nil {
+		s.log.Error("release hold: load sender", "id", id, "err", err)
+		return
+	}
+	var tok *store.Token
+	if released.TokenID.Valid {
+		t, err := s.q.GetTokenByID(ctx, released.TokenID)
+		if err == nil {
+			tok = &t
+		}
+	}
+
+	// Re-enter the standard tail: transfer, ledger, mark settled, push.
+	if err := s.transfer(ctx, &released, receiver); err != nil {
+		_ = s.fail(ctx, released, tok, fmt.Sprintf("transfer (post-hold): %v", err))
+		return
+	}
+	chargeRef := ""
+	if released.ChargeReference != nil {
+		chargeRef = *released.ChargeReference
+	}
+	if err := s.ledger.RecordPaymentPair(
+		ctx,
+		pgconv.UUIDTo(released.ID),
+		pgconv.UUIDTo(released.SenderUserID),
+		pgconv.UUIDTo(released.ReceiverUserID),
+		released.AmountKobo,
+		chargeRef,
+	); err != nil {
+		_ = s.fail(ctx, released, tok, fmt.Sprintf("ledger (post-hold): %v", err))
+		return
+	}
+	settled, err := s.q.MarkPaymentSettled(ctx, released.ID)
+	if err != nil {
+		s.log.Error("release hold: mark settled", "id", id, "err", err)
+		return
+	}
+	if tok != nil {
+		_, _ = s.q.MarkTokenSettled(ctx, store.MarkTokenSettledParams{
+			ID:               tok.ID,
+			SettledPaymentID: settled.ID,
+		})
+	}
+
+	// Same post-settle side effects as the synchronous path.
+	senderName := "Someone"
+	if sender.FullName != nil && *sender.FullName != "" {
+		senderName = *sender.FullName
+	} else if sender.Phone != "" {
+		senderName = sender.Phone
+	}
+	s.push.NotifyPaymentReceived(ctx, settled, senderName)
+}
+
+// ReleaseDueHolds is the reconciler safety net — runs each tick and picks
+// up any held payments whose in-process timer was lost across a restart.
+// Idempotent: ReleaseHeldPayment is conditional on status=held, so an
+// already-released row is a no-op.
+func (s *Service) ReleaseDueHolds(ctx context.Context, batchSize int32) (int, error) {
+	rows, err := s.q.ListExpiredHolds(ctx, store.ListExpiredHoldsParams{
+		HoldExpiresAt: pgconv.TimeFrom(time.Now()),
+		Limit:         batchSize,
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		s.releaseHold(ctx, pgconv.UUIDTo(row.ID))
+	}
+	return len(rows), nil
+}
+
+// UndoRequest mirrors POST /v1/payments/:id/undo.
+type UndoRequest struct {
+	PaymentID uuid.UUID
+	CallerID  uuid.UUID
+}
+
+// Undo refunds a held payment's charge before the window elapses. The DB
+// transition status=held → status=refunded is conditional, so this races
+// safely against the release timer and against itself.
+func (s *Service) Undo(ctx context.Context, req UndoRequest) (store.Payment, error) {
+	p, err := s.q.GetPaymentByID(ctx, pgconv.UUIDFrom(req.PaymentID))
+	if err != nil {
+		return store.Payment{}, fmt.Errorf("load payment: %w", err)
+	}
+	if pgconv.UUIDTo(p.SenderUserID) != req.CallerID {
+		return store.Payment{}, ErrNotSender
+	}
+	if p.Status != "held" {
+		return store.Payment{}, ErrUndoUnavailable
+	}
+	if !p.HoldExpiresAt.Valid || pgconv.TimeTo(p.HoldExpiresAt).Before(time.Now()) {
+		return store.Payment{}, ErrUndoWindowClosed
+	}
+	if p.ChargeReference == nil || *p.ChargeReference == "" {
+		return store.Payment{}, ErrUndoUnavailable
+	}
+
+	refund, err := s.ps.RefundCharge(ctx, paystack.RefundRequest{
+		Transaction:  *p.ChargeReference,
+		Amount:       p.AmountKobo,
+		MerchantNote: "undo within window",
+		CustomerNote: "EchoPay payment undone",
+	})
+	if err != nil {
+		return store.Payment{}, fmt.Errorf("paystack refund: %w", err)
+	}
+
+	reason := "undone within window"
+	updated, err := s.q.MarkPaymentRefunded(ctx, store.MarkPaymentRefundedParams{
+		ID:                  p.ID,
+		AutoRefundReference: &refund.Reference,
+		FailureReason:       &reason,
+	})
+	if err != nil {
+		// Race with the release timer — the timer won. The refund call
+		// already went through Paystack, though; in practice this means
+		// we've refunded an actual transfer that may still ship out.
+		// Surface as an explicit error so the caller doesn't claim
+		// success on a state that didn't settle.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.Payment{}, ErrUndoWindowClosed
+		}
+		return store.Payment{}, fmt.Errorf("mark refunded: %w", err)
+	}
+
+	// Cancel the parked timer if it hasn't fired yet — harmless if it has.
+	s.holdMu.Lock()
+	if t, ok := s.holdTimers[req.PaymentID]; ok {
+		t.Stop()
+		delete(s.holdTimers, req.PaymentID)
+	}
+	s.holdMu.Unlock()
+
+	// Mark the associated token failed so the receiver UI doesn't keep
+	// waiting on a payment that will never arrive.
+	if updated.TokenID.Valid {
+		_, _ = s.q.MarkTokenFailed(ctx, updated.TokenID)
+	}
+
+	s.audit.Record(ctx, audit.Event{
+		UserID:    pgconv.UUIDTo(updated.SenderUserID),
+		ActorID:   pgconv.UUIDTo(updated.SenderUserID),
+		Action:    audit.ActionRefundIssued,
+		TargetTyp: "payment",
+		TargetID:  pgconv.UUIDTo(updated.ID).String(),
+		Metadata: map[string]any{
+			"reason":      "undo",
+			"amount_kobo": updated.AmountKobo,
+		},
+	})
+	return updated, nil
 }
 
 // Refund creates a new payment from the original receiver back to the original

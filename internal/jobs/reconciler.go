@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/ravhn/echoapp-backend/internal/payments"
 	"github.com/ravhn/echoapp-backend/internal/paystack"
 	"github.com/ravhn/echoapp-backend/internal/pgconv"
 	"github.com/ravhn/echoapp-backend/internal/risk"
@@ -30,31 +31,50 @@ const (
 )
 
 type Reconciler struct {
-	q      store.Querier
-	ps     *paystack.Client
-	limits *risk.LimitsService
-	log    *slog.Logger
+	q        store.Querier
+	ps       *paystack.Client
+	limits   *risk.LimitsService
+	payments *payments.Service // for the held-payment safety net
+	log      *slog.Logger
 }
 
-func NewReconciler(q store.Querier, ps *paystack.Client, limits *risk.LimitsService, log *slog.Logger) *Reconciler {
-	return &Reconciler{q: q, ps: ps, limits: limits, log: log}
+func NewReconciler(
+	q store.Querier,
+	ps *paystack.Client,
+	limits *risk.LimitsService,
+	paymentsSvc *payments.Service,
+	log *slog.Logger,
+) *Reconciler {
+	return &Reconciler{q: q, ps: ps, limits: limits, payments: paymentsSvc, log: log}
 }
 
 // Run blocks until ctx is cancelled, sweeping stuck payments every tick.
-// Call this in a goroutine from main.
+// Two cadences: the slow 5-minute sweep for stuck Paystack flows, and a
+// faster 2-second tick that releases held payments whose in-process
+// timer was lost across a restart.
 func (r *Reconciler) Run(ctx context.Context) {
 	r.log.Info("reconciler started", "interval", tickInterval.String())
-	ticker := time.NewTicker(tickInterval)
-	defer ticker.Stop()
+	slow := time.NewTicker(tickInterval)
+	defer slow.Stop()
+	fast := time.NewTicker(2 * time.Second)
+	defer fast.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			r.log.Info("reconciler stopped")
 			return
-		case <-ticker.C:
+		case <-slow.C:
 			r.sweep(ctx)
+		case <-fast.C:
+			r.releaseDueHolds(ctx)
 		}
+	}
+}
+
+func (r *Reconciler) releaseDueHolds(ctx context.Context) {
+	if _, err := r.payments.ReleaseDueHolds(ctx, reconcileBatchSize); err != nil {
+		r.log.Error("release due holds", "err", err)
 	}
 }
 
