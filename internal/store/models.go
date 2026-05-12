@@ -8,6 +8,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuditEvent struct {
+	ID          int64              `json:"id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	ActorUserID pgtype.UUID        `json:"actor_user_id"`
+	Action      string             `json:"action"`
+	TargetType  *string            `json:"target_type"`
+	TargetID    *string            `json:"target_id"`
+	Metadata    []byte             `json:"metadata"`
+	Ip          *string            `json:"ip"`
+	UserAgent   *string            `json:"user_agent"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type DeviceSession struct {
 	ID          pgtype.UUID        `json:"id"`
 	UserID      pgtype.UUID        `json:"user_id"`
