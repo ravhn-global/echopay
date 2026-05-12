@@ -48,6 +48,17 @@ func AuthMiddleware(issuer *auth.Issuer, q store.Querier) echo.MiddlewareFunc {
 				return echo.NewHTTPError(http.StatusInternalServerError, "session lookup failed")
 			}
 
+			// Account-locked check — design system "Account locked" screen.
+			// 423 Locked tells the client to route to its dedicated screen
+			// rather than the generic auth-error path.
+			user, err := q.GetUserByID(c.Request().Context(), session.UserID)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "user lookup failed")
+			}
+			if user.Status == "locked" || user.Status == "suspended" {
+				return echo.NewHTTPError(http.StatusLocked, "account "+user.Status)
+			}
+
 			// Best-effort last_seen update; the WHERE clause limits writes.
 			_ = q.TouchDeviceSession(c.Request().Context(), store.TouchDeviceSessionParams{
 				Jti:        pgconv.UUIDFrom(claims.JTI),
@@ -56,9 +67,6 @@ func AuthMiddleware(issuer *auth.Issuer, q store.Querier) echo.MiddlewareFunc {
 
 			c.Set(userContextKey, claims.UserID)
 			c.Set(jtiContextKey, claims.JTI)
-			// Use session here so the var isn't reported unused if we
-			// later branch on its fields.
-			_ = session
 			return next(c)
 		}
 	}

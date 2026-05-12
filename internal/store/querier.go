@@ -59,6 +59,7 @@ type Querier interface {
 	RevokeDeviceSession(ctx context.Context, arg RevokeDeviceSessionParams) error
 	RevokeMandate(ctx context.Context, arg RevokeMandateParams) error
 	SetDefaultMandate(ctx context.Context, arg SetDefaultMandateParams) (Mandate, error)
+	SetUserStatus(ctx context.Context, arg SetUserStatusParams) (User, error)
 	SumUserSentLast24h(ctx context.Context, senderUserID pgtype.UUID) (int64, error)
 	TouchDeviceSession(ctx context.Context, arg TouchDeviceSessionParams) error
 	UnsetDefaultMandate(ctx context.Context, userID pgtype.UUID) error

@@ -94,6 +94,42 @@ func (q *Queries) GetUserByPhone(ctx context.Context, phone string) (User, error
 	return i, err
 }
 
+const setUserStatus = `-- name: SetUserStatus :one
+UPDATE users
+SET status = $2,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, phone, full_name, bvn_hash, date_of_birth, kyc_tier, kyc_status, nuban, bank_code, account_name, per_tx_limit_kobo, per_day_limit_kobo, status, created_at, updated_at
+`
+
+type SetUserStatusParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Status string      `json:"status"`
+}
+
+func (q *Queries) SetUserStatus(ctx context.Context, arg SetUserStatusParams) (User, error) {
+	row := q.db.QueryRow(ctx, setUserStatus, arg.ID, arg.Status)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Phone,
+		&i.FullName,
+		&i.BvnHash,
+		&i.DateOfBirth,
+		&i.KycTier,
+		&i.KycStatus,
+		&i.Nuban,
+		&i.BankCode,
+		&i.AccountName,
+		&i.PerTxLimitKobo,
+		&i.PerDayLimitKobo,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const sumUserSentLast24h = `-- name: SumUserSentLast24h :one
 SELECT COALESCE(SUM(amount_kobo), 0)::BIGINT AS total_kobo
 FROM payments

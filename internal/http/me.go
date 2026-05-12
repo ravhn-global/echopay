@@ -25,6 +25,40 @@ func (h *meHandler) mount(g *echo.Group) {
 	g.GET("/me", h.get)
 	g.PUT("/me/receive-account", h.setReceiveAccount)
 	g.PUT("/me/limits", h.setLimits)
+	g.POST("/me/lock", h.lock)
+}
+
+// lock is the "Not me — lock account" path from the design's suspicious-
+// login screen. Self-service freeze: user status flips to "locked" and
+// every active session — including the calling one — is revoked. Recovery
+// from this state requires support intervention (out of scope for v1).
+func (h *meHandler) lock(c echo.Context) error {
+	userID := UserIDFrom(c)
+	if userID == uuid.Nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "no user")
+	}
+	if _, err := h.q.SetUserStatus(c.Request().Context(), store.SetUserStatusParams{
+		ID:     pgconv.UUIDFrom(userID),
+		Status: "locked",
+	}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	currentJTI := JTIFrom(c)
+	if session, err := h.q.GetActiveDeviceSessionByJTI(
+		c.Request().Context(), pgconv.UUIDFrom(currentJTI),
+	); err == nil {
+		_ = h.q.RevokeAllOtherDeviceSessions(c.Request().Context(),
+			store.RevokeAllOtherDeviceSessionsParams{
+				UserID: pgconv.UUIDFrom(userID),
+				ID:     session.ID,
+			})
+		_ = h.q.RevokeDeviceSession(c.Request().Context(),
+			store.RevokeDeviceSessionParams{
+				ID:     session.ID,
+				UserID: pgconv.UUIDFrom(userID),
+			})
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (h *meHandler) get(c echo.Context) error {

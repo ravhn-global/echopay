@@ -54,6 +54,10 @@ func (h *Handler) submitBVN(c echo.Context) error {
 		switch {
 		case errors.Is(err, ErrInvalidBVN), errors.Is(err, ErrInvalidDOB):
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrBVNMismatch):
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
+		case errors.Is(err, ErrProviderFailed):
+			return echo.NewHTTPError(http.StatusBadGateway, "identity provider unavailable")
 		default:
 			return echo.NewHTTPError(http.StatusInternalServerError, "kyc failed")
 		}

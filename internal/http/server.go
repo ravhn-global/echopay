@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
@@ -46,7 +47,17 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	jwtIssuer := auth.NewIssuer(cfg.JWTSecret, cfg.JWTTTL)
 
 	authSvc := auth.NewService(queries, jwtIssuer, log)
-	kycSvc := kyc.NewService(queries)
+
+	var kycProvider kyc.Provider = kyc.StubProvider{}
+	if cfg.KYCProvider == "youverify" && cfg.YouVerifyAPIKey != "" {
+		kycProvider = kyc.NewYouVerifyProvider(
+			kyc.NewYouVerifyClient(cfg.YouVerifyBaseURL, cfg.YouVerifyAPIKey),
+		)
+		log.Info("kyc provider", "name", "youverify")
+	} else {
+		log.Info("kyc provider", "name", "stub")
+	}
+	kycSvc := kyc.NewService(queries, kycProvider, log)
 	mandatesSvc := mandates.NewService(queries, ps)
 	tokensSvc := tokens.NewService(queries, rdb)
 	ledgerSvc := ledger.NewService(queries)
@@ -66,13 +77,20 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	// route to the force-update screen when they're below the floor.
 	(&appVersionHandler{cfg: cfg}).mount(e)
 
-	// Public (unauthenticated) routes.
-	v1Public := e.Group("/v1")
+	// Public (unauthenticated) routes — IP-bucketed so a buggy client
+	// or scripted attacker can't burn OTPs / signin attempts.
+	otpLimit := NewRateLimit(rdb, "public", 6, time.Minute)
+	v1Public := e.Group("/v1", otpLimit.Middleware(IPSubject))
 	auth.NewHandler(authSvc, log, cfg.IsDev()).Mount(v1Public)
 
-	// Authenticated routes — middleware also gates JWT revocation by
-	// checking the jti against device_sessions on every request.
-	v1Auth := e.Group("/v1", AuthMiddleware(jwtIssuer, queries))
+	// Authenticated routes — middleware gates JWT revocation by checking
+	// the jti against device_sessions, plus a user-bucketed rate limit
+	// on top so a runaway client can't hammer the orchestrator.
+	apiLimit := NewRateLimit(rdb, "api", 120, time.Minute)
+	v1Auth := e.Group("/v1",
+		AuthMiddleware(jwtIssuer, queries),
+		apiLimit.Middleware(UserIDSubject),
+	)
 	(&meHandler{authSvc: authSvc, q: queries, ps: ps, limits: limitsSvc}).mount(v1Auth)
 	kyc.NewHandler(kycSvc, UserIDFrom).Mount(v1Auth)
 	mandates.NewHandler(mandatesSvc, UserIDFrom).Mount(v1Auth)

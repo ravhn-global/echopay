@@ -32,6 +32,13 @@ type Config struct {
 	// banner update path (not gated server-side).
 	MinSupportedAppVersion string `env:"MIN_SUPPORTED_APP_VERSION" envDefault:"0.1.0"`
 	LatestAppVersion       string `env:"LATEST_APP_VERSION" envDefault:"0.1.0"`
+
+	// KYC provider — "stub" (default; format checks only) or "youverify".
+	// Switch to "youverify" once you have a sandbox key from
+	// https://app.youverify.co. Production base URL is the no-sandbox host.
+	KYCProvider       string `env:"KYC_PROVIDER" envDefault:"stub"`
+	YouVerifyBaseURL  string `env:"YOUVERIFY_BASE_URL" envDefault:"https://api.sandbox.youverify.co"`
+	YouVerifyAPIKey   string `env:"YOUVERIFY_API_KEY"`
 }
 
 func (c *Config) IsDev() bool {

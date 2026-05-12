@@ -43,3 +43,10 @@ FROM payments
 WHERE sender_user_id = $1
   AND status IN ('initiated', 'debiting', 'transferring', 'settled')
   AND created_at > NOW() - INTERVAL '24 hours';
+
+-- name: SetUserStatus :one
+UPDATE users
+SET status = $2,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
