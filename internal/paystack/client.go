@@ -325,3 +325,28 @@ func (c *Client) ResolveAccount(ctx context.Context, accountNumber, bankCode str
 	}
 	return &env.Data, nil
 }
+
+// ---- Bank directory ----
+
+type Bank struct {
+	Name string `json:"name"`
+	Code string `json:"code"`
+	// Slug is Paystack's URL-safe identifier; useful when the same bank
+	// has multiple records (e.g. "Access Bank" vs "Access Bank Diamond").
+	Slug     string `json:"slug,omitempty"`
+	Active   bool   `json:"active,omitempty"`
+	Currency string `json:"currency,omitempty"`
+	Type     string `json:"type,omitempty"`
+}
+
+// ListBanks fetches the full Paystack bank directory for Nigeria. Returns
+// ~120 entries including digital banks (Kuda, Opay, Palmpay) and microfinance
+// institutions — the caller should cache aggressively, the list changes
+// rarely.
+func (c *Client) ListBanks(ctx context.Context) ([]Bank, error) {
+	var env envelope[[]Bank]
+	if err := c.do(ctx, http.MethodGet, "/bank?country=nigeria&perPage=200", nil, &env); err != nil {
+		return nil, err
+	}
+	return env.Data, nil
+}

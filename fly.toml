@@ -1,0 +1,50 @@
+# EchoPay backend — Fly.io config.
+#
+# Edit + redeploy: `fly deploy`. Secrets (DATABASE_URL, REDIS_URL, etc.)
+# live in `fly secrets`, NOT in this file — anything here is committed
+# to git and visible. See README for the one-time secret setup.
+
+app = "echopay-api"
+# `jnb` (Johannesburg) is the closest region to Nigeria; falls back to
+# `fra` (Frankfurt) if jnb is at capacity. The `primary_region` here is
+# advisory — fly chooses where to actually place the VM.
+primary_region = "jnb"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# The backend reads HTTP_ADDR from the env; we pin it to :8080 so the
+# health check below works without guessing. Fly's edge proxy forwards
+# external 80/443 → internal 8080.
+[env]
+  HTTP_ADDR = ":8080"
+  ENV = "production"
+  LOG_LEVEL = "info"
+  # Keep the rest (DATABASE_URL, REDIS_URL, JWT_SECRET, PAYSTACK_*,
+  # MIN_SUPPORTED_APP_VERSION, LATEST_APP_VERSION, KYC_PROVIDER, etc.)
+  # in `fly secrets set ...` — that's the safe place for them.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Free tier sleeps after some idle, which would kill the 5-min
+  # reconciler and the in-process 10s undo timers. Keep at least one
+  # machine running.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # Lightweight HTTP health check — hits /health (public, unauthenticated).
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "get"
+    path = "/health"
+
+# Single shared-cpu-1x VM — 256MB RAM. Plenty for the Go binary +
+# pgxpool (max 10 conns by default) + Redis client. Bump to 512MB if
+# the reconciler ever needs to hold large batches in memory.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

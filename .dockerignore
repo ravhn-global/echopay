@@ -1,0 +1,23 @@
+# Build artifacts
+bin/
+dist/
+
+# Local config (secrets go in via `fly secrets set`, never baked into image)
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Logs / tmp
+*.log
+tmp/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -85,6 +85,9 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	otpLimit := NewRateLimit(rdb, "public", 6, time.Minute)
 	v1Public := e.Group("/v1", otpLimit.Middleware(IPSubject))
 	auth.NewHandler(authSvc, log, cfg.IsDev()).Mount(v1Public)
+	// Bank directory — public so the picker works on first launch without
+	// burning a JWT round-trip. Cached 24h in Redis.
+	(&banksHandler{ps: ps, rdb: rdb}).mount(v1Public)
 
 	// Authenticated routes — middleware gates JWT revocation by checking
 	// the jti against device_sessions, plus a user-bucketed rate limit
