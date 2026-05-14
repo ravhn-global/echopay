@@ -30,15 +30,33 @@ const (
 )
 
 type Service struct {
-	q      store.Querier
-	issuer *Issuer
-	push   *push.Service
-	audit  *audit.Service
-	log    *slog.Logger
+	q       store.Querier
+	issuer  *Issuer
+	push    *push.Service
+	audit   *audit.Service
+	log     *slog.Logger
+	devMode bool
 }
 
-func NewService(q store.Querier, issuer *Issuer, pushSvc *push.Service, auditSvc *audit.Service, log *slog.Logger) *Service {
-	return &Service{q: q, issuer: issuer, push: pushSvc, audit: auditSvc, log: log}
+func NewService(q store.Querier, issuer *Issuer, pushSvc *push.Service, auditSvc *audit.Service, log *slog.Logger, devMode bool) *Service {
+	return &Service{q: q, issuer: issuer, push: pushSvc, audit: auditSvc, log: log, devMode: devMode}
+}
+
+// QA fixture: when devMode is on, these two phones accept the magic OTP
+// "000000" without going through the bcrypt hash check. Lets the team
+// click through pay/receive flows on both sides without fishing the
+// real code out of the response on every fresh login. The bypass is
+// dead code in production (devMode = ENV != production).
+var magicOTPPhones = map[string]struct{}{
+	"+2348012345678": {}, // Test User
+	"+2348022222222": {}, // Adaeze Okeke (counterparty)
+}
+
+const magicOTPCode = "000000"
+
+func isMagicOTPPhone(phone string) bool {
+	_, ok := magicOTPPhones[phone]
+	return ok
 }
 
 // RequestOTP generates a fresh OTP, expires any pending ones for the same
@@ -123,8 +141,12 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, purpose, code string, de
 	if _, err := s.q.IncrementOTPAttempts(ctx, req.ID); err != nil {
 		return nil, fmt.Errorf("increment attempts: %w", err)
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(req.CodeHash), []byte(code)); err != nil {
-		return nil, ErrOTPInvalid
+	// Magic-code fast path for QA: skip the hash check for whitelisted
+	// test phones in dev mode. Everything else still goes through bcrypt.
+	if !(s.devMode && code == magicOTPCode && isMagicOTPPhone(phone)) {
+		if err := bcrypt.CompareHashAndPassword([]byte(req.CodeHash), []byte(code)); err != nil {
+			return nil, ErrOTPInvalid
+		}
 	}
 	if err := s.q.MarkOTPVerified(ctx, req.ID); err != nil {
 		return nil, fmt.Errorf("mark otp verified: %w", err)

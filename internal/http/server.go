@@ -49,7 +49,7 @@ func New(cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool, rdb *redis.Cl
 	jwtIssuer := auth.NewIssuer(cfg.JWTSecret, cfg.JWTTTL)
 
 	auditSvc := audit.NewService(queries, log)
-	authSvc := auth.NewService(queries, jwtIssuer, pushSvc, auditSvc, log)
+	authSvc := auth.NewService(queries, jwtIssuer, pushSvc, auditSvc, log, cfg.IsDev())
 
 	var kycProvider kyc.Provider = kyc.StubProvider{}
 	if cfg.KYCProvider == "youverify" && cfg.YouVerifyAPIKey != "" {
