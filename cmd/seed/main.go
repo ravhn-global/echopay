@@ -70,6 +70,38 @@ var counterparty = userFixture{
 	},
 }
 
+// Two additional seeded accounts that pair off against each other (Olawale
+// pays Hammed, Hammed pays Olawale). Lets QA exercise the pay flow with a
+// second independent test pair without polluting the primary / counterparty
+// history.
+var olawale = userFixture{
+	phone:       "+2348033333333",
+	fullName:    "Olawale Adeosun",
+	bvn:         "44444444444",
+	dob:         "1988-11-22",
+	nuban:       "0011223344",
+	bankCode:    "011",
+	bankName:    "First Bank of Nigeria",
+	accountName: "OLAWALE ADEOSUN",
+	mandates: []mandateFixture{
+		{"AUTH_test_seed_first", "First Bank of Nigeria", "011", "5678", "card", true},
+	},
+}
+
+var hammed = userFixture{
+	phone:       "+2348044444444",
+	fullName:    "Hammed Mubarak",
+	bvn:         "55555555555",
+	dob:         "1995-03-08",
+	nuban:       "0055667788",
+	bankCode:    "033",
+	bankName:    "United Bank for Africa",
+	accountName: "HAMMED MUBARAK",
+	mandates: []mandateFixture{
+		{"AUTH_test_seed_uba", "United Bank for Africa", "033", "9090", "card", true},
+	},
+}
+
 // A transaction in the seeded history. Direction is from primary's POV —
 // "out" means primary paid counterparty, "in" means primary received.
 type txFixture struct {
@@ -106,11 +138,18 @@ func main() {
 
 	primaryID := upsertUser(ctx, pool, primary)
 	counterpartyID := upsertUser(ctx, pool, counterparty)
+	olawaleID := upsertUser(ctx, pool, olawale)
+	hammedID := upsertUser(ctx, pool, hammed)
 
 	primaryMandateID := defaultMandateID(ctx, pool, primaryID)
 	counterMandateID := defaultMandateID(ctx, pool, counterpartyID)
+	olawaleMandateID := defaultMandateID(ctx, pool, olawaleID)
+	hammedMandateID := defaultMandateID(ctx, pool, hammedID)
 
 	seedHistory(ctx, pool, primaryID, primaryMandateID, counterpartyID, counterMandateID, "primary")
+	// Second test pair — Olawale ↔ Hammed — so QA can run a parallel pay
+	// flow without touching the primary/counterparty fixtures.
+	seedHistory(ctx, pool, olawaleID, olawaleMandateID, hammedID, hammedMandateID, "olawale")
 
 	// If the developer is logged in as a non-seeded account (e.g. they typed
 	// their real phone during dev), populate history for that account too.
@@ -126,9 +165,12 @@ func main() {
 		}
 	}
 
-	fmt.Println("\nLog in by entering 8012345678 on the welcome screen.")
-	fmt.Println("Counterparty (Adaeze) lives at +2348022222222 — log in as her to see the mirror side of every payment.")
-	fmt.Println("In dev (ENV=local) the OTP comes back in the request response and auto-fills.")
+	fmt.Println("\nSeeded test accounts:")
+	fmt.Println("  · Test User       8012345678  pair: Adaeze")
+	fmt.Println("  · Adaeze Okeke    8022222222  pair: Test User")
+	fmt.Println("  · Olawale Adeosun 8033333333  pair: Hammed")
+	fmt.Println("  · Hammed Mubarak  8044444444  pair: Olawale")
+	fmt.Println("\nIn dev mode all four accept the magic OTP \"000000\" (no SMS needed).")
 }
 
 func upsertUser(ctx context.Context, pool *pgxpool.Pool, f userFixture) string {

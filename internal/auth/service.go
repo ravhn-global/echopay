@@ -50,6 +50,8 @@ func NewService(q store.Querier, issuer *Issuer, pushSvc *push.Service, auditSvc
 var magicOTPPhones = map[string]struct{}{
 	"+2348012345678": {}, // Test User
 	"+2348022222222": {}, // Adaeze Okeke (counterparty)
+	"+2348033333333": {}, // Olawale Adeosun (second pair)
+	"+2348044444444": {}, // Hammed Mubarak (second pair)
 }
 
 const magicOTPCode = "000000"
