@@ -91,7 +91,7 @@ func (s *Service) NotifyAccountLocked(ctx context.Context, userID uuid.UUID) {
 	s.fanoutToUser(
 		ctx,
 		userID,
-		"BuzzPay account locked",
+		"EchoPay NG account locked",
 		"We've paused all activity for safety. Tap to contact support.",
 		map[string]string{"type": "account_locked"},
 	)

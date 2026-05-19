@@ -164,7 +164,7 @@ func (r *Reconciler) autoRefundOne(ctx context.Context, p store.Payment) error {
 		Transaction:  *p.ChargeReference,
 		Amount:       p.AmountKobo,
 		MerchantNote: "auto-refund: 24h stuck",
-		CustomerNote: "BuzzPay refund: payment couldn't be delivered",
+		CustomerNote: "EchoPay NG refund: payment couldn't be delivered",
 	})
 	if err != nil {
 		return err
