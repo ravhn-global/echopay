@@ -123,6 +123,15 @@ var history = []txFixture{
 	{"out", 1_200_000, 13, "refunded", ""}, // ₦12,000 refunded
 }
 
+// Smaller batch for cross-pair seeding — three recent settled transactions
+// per cross pair so every account's feed shows movement with counterparties
+// other than their primary pair, in addition to the longer history above.
+var recent = []txFixture{
+	{"out", 120_000, 0, "settled", ""}, // ₦1,200 today
+	{"in", 450_000, 1, "settled", ""},  // ₦4,500 yesterday
+	{"out", 60_000, 2, "settled", ""},  // ₦600 day before
+}
+
 func main() {
 	_ = godotenv.Load()
 	dsn := os.Getenv("DATABASE_URL")
@@ -146,10 +155,24 @@ func main() {
 	olawaleMandateID := defaultMandateID(ctx, pool, olawaleID)
 	hammedMandateID := defaultMandateID(ctx, pool, hammedID)
 
-	seedHistory(ctx, pool, primaryID, primaryMandateID, counterpartyID, counterMandateID, "primary")
-	// Second test pair — Olawale ↔ Hammed — so QA can run a parallel pay
-	// flow without touching the primary/counterparty fixtures.
-	seedHistory(ctx, pool, olawaleID, olawaleMandateID, hammedID, hammedMandateID, "olawale")
+	// Main pair history — Test User ↔ Adaeze, 8 transactions spanning 2 weeks.
+	seedHistory(ctx, pool, primaryID, primaryMandateID, counterpartyID, counterMandateID, history, "primary-pair")
+	// Second main pair — Olawale ↔ Hammed.
+	seedHistory(ctx, pool, olawaleID, olawaleMandateID, hammedID, hammedMandateID, history, "olawale-pair")
+
+	// Recent cross-pair activity so every account sees varied counterparties
+	// in their feed — not just their main pair. 3 transactions per cross pair,
+	// all within the last 3 days.
+	for _, c := range []struct {
+		focusID, focusMandate, peerID, peerMandate, label string
+	}{
+		{primaryID, primaryMandateID, olawaleID, olawaleMandateID, "primary-x-olawale"},
+		{primaryID, primaryMandateID, hammedID, hammedMandateID, "primary-x-hammed"},
+		{counterpartyID, counterMandateID, olawaleID, olawaleMandateID, "adaeze-x-olawale"},
+		{counterpartyID, counterMandateID, hammedID, hammedMandateID, "adaeze-x-hammed"},
+	} {
+		seedHistory(ctx, pool, c.focusID, c.focusMandate, c.peerID, c.peerMandate, recent, c.label)
+	}
 
 	// If the developer is logged in as a non-seeded account (e.g. they typed
 	// their real phone during dev), populate history for that account too.
@@ -159,7 +182,7 @@ func main() {
 			if extraMandate == "" {
 				extraMandate = upsertExtraMandate(ctx, pool, extraID)
 			}
-			seedHistory(ctx, pool, extraID, extraMandate, counterpartyID, counterMandateID, extraPhone)
+			seedHistory(ctx, pool, extraID, extraMandate, counterpartyID, counterMandateID, history, "extra-"+extraPhone)
 		} else {
 			fmt.Fprintf(os.Stderr, "SEED_HISTORY_FOR_PHONE=%s — no such user, skipping\n", extraPhone)
 		}
@@ -282,19 +305,22 @@ func upsertExtraMandate(ctx context.Context, pool *pgxpool.Pool, userID string) 
 }
 
 // seedHistory writes the txFixture list as payments + ledger entries
-// between userID (the focus) and counterID. Idempotent via deterministic
-// idempotency keys; re-runs update timestamps but don't duplicate rows.
+// between userID (the focus) and counterID. The scope label is baked
+// into the idempotency key so the same pair can be seeded with multiple
+// distinct history sets (e.g. "primary" + "recent-xa-xc") without
+// stepping on each other.
 func seedHistory(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	userID, userMandateID, counterID, counterMandateID string,
-	label string,
+	txs []txFixture,
+	scope string,
 ) {
 	now := time.Now()
-	for i, tx := range history {
-		// Deterministic IDs so re-running the seed is a no-op for existing
-		// rows. Token uses the same seed scope as the payment so they line up.
-		idemKey := fmt.Sprintf("seed:%s:%d", userID, i)
+	for i, tx := range txs {
+		// Deterministic IDs include the scope so cross-pair seeds don't
+		// collide on the (focus, index) tuple.
+		idemKey := fmt.Sprintf("seed:%s:%s:%d", scope, userID, i)
 		tokenID := deterministicUUID("token:" + idemKey)
 		paymentID := deterministicUUID("payment:" + idemKey)
 
@@ -330,7 +356,7 @@ func seedHistory(
 				$1, $2, $3, $4, 'settled', $5, $6, $6, $1, $6
 			)
 			ON CONFLICT (id) DO NOTHING
-		`, tokenID, fmt.Sprintf("s%s%02d", userID[:13], i), receiver, tx.amount, sender, created)
+		`, tokenID, tokenCodeFor(idemKey), receiver, tx.amount, sender, created)
 		must(err, "insert seed token")
 
 		_, err = pool.Exec(ctx, `
@@ -368,7 +394,7 @@ func seedHistory(
 			must(err, "insert ledger pair")
 		}
 	}
-	fmt.Printf("  seeded %d history rows for %s\n", len(history), label)
+	fmt.Printf("  seeded %d %s rows for user %s\n", len(txs), scope, userID[:8])
 }
 
 // deterministicUUID derives a stable v5 UUID from a seed string so re-runs
@@ -376,6 +402,14 @@ func seedHistory(
 func deterministicUUID(seed string) uuid.UUID {
 	ns := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	return uuid.NewSHA1(ns, []byte(seed))
+}
+
+// tokenCodeFor turns an idem key into a 16-char hex string that satisfies
+// the production token regex AND the tokens.code unique constraint across
+// scopes. SHA-256 → first 8 bytes → 16 hex chars.
+func tokenCodeFor(idemKey string) string {
+	sum := sha256.Sum256([]byte(idemKey))
+	return hex.EncodeToString(sum[:8])
 }
 
 func must(err error, label string) {
