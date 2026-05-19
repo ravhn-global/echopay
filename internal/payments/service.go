@@ -345,7 +345,7 @@ func (s *Service) Undo(ctx context.Context, req UndoRequest) (store.Payment, err
 		Transaction:  *p.ChargeReference,
 		Amount:       p.AmountKobo,
 		MerchantNote: "undo within window",
-		CustomerNote: "EchoPay payment undone",
+		CustomerNote: "BuzzPay payment undone",
 	})
 	if err != nil {
 		return store.Payment{}, fmt.Errorf("paystack refund: %w", err)
@@ -629,7 +629,7 @@ func (s *Service) transfer(ctx context.Context, p *store.Payment, receiver store
 		Source:    "balance",
 		Amount:    p.AmountKobo,
 		Recipient: recipient.RecipientCode,
-		Reason:    "Echo payment",
+		Reason:    "BuzzPay payment",
 		Reference: "TXF_" + pgconv.UUIDTo(p.ID).String(),
 	})
 	if err != nil {
